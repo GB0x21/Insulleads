@@ -247,57 +247,55 @@ class PermitsAgent(BaseAgent):
 
     # ── Telegram notify ────────────────────────────────────────────
     def notify(self, lead: dict):
-        quality_score   = lead.get("lead_quality_score", 0)
-        quality_emoji   = lead.get("quality_emoji", "✅")
-        quality_label   = lead.get("quality_label", "BUENO")
-        contact_lbl     = contact_score_label(lead.get("contact_score", 0))
+        quality_score = lead.get("lead_quality_score", 0)
+        quality_emoji = lead.get("quality_emoji", "✅")
+        quality_label = lead.get("quality_label", "BUENO")
+        contact_lbl   = contact_score_label(lead.get("contact_score", 0))
 
-        # Contratista con todos sus datos
-        ctr_name    = lead.get("contractor") or "No indicado"
-        ctr_phone   = lead.get("contractor_phone") or "—"
-        ctr_addr    = lead.get("contractor_addr") or "—"
-        ctr_lic     = lead.get("contractor_license") or "—"
-        ctr_status  = lead.get("contractor_status") or "—"
-        ctr_types   = lead.get("contractor_types") or "—"
+        def _v(key, fallback=None):
+            """Retorna el valor solo si no está vacío, None si no hay."""
+            val = (lead.get(key) or "").strip()
+            if not val or val.lower() in ("no indicado", "no encontrado", "n/a", "—"):
+                return fallback
+            return val
 
-        # Propietario
-        owner       = lead.get("owner") or "No encontrado"
-        owner_mail  = lead.get("owner_mail_addr") or "—"
-        owner_phone = lead.get("owner_phone") or "—"
-
-        # Campos solo si tienen valor
         fields = {
-            # ── CALIDAD ──────────────────────────────
-            f"{quality_emoji} Calidad del Lead": f"{quality_label}  ({quality_score}/10)",
-            "📋 Datos de Contacto":              contact_lbl,
+            # ── CALIDAD ─────────────────────────────────────
+            f"{quality_emoji} Calidad del Lead":  f"{quality_label}  ({quality_score}/10)",
+            "📋 Datos de Contacto":               contact_lbl,
 
-            # ── PROYECTO ─────────────────────────────
-            "💰 Valor Estimado":    lead.get("estimated_cost", "—"),
-            "🏷️ Tipo de Permiso":   lead.get("permit_type", "—"),
-            "📝 Descripción":       lead.get("description", "—"),
-            "📅 Fecha Solicitud":   lead.get("filed_date", "—"),
-            "🔖 Estado Permiso":    lead.get("status", "—"),
-            "🔢 Permiso #":         lead.get("permit_no", "—"),
+            # ── PROYECTO ────────────────────────────────────
+            "💰 Valor Estimado":    _v("estimated_cost", "—"),
+            "🏷️ Tipo de Permiso":   _v("permit_type", "—"),
+            "📝 Descripción":       _v("description", "—"),
+            "📅 Fecha Solicitud":   _v("filed_date", "—"),
+            "🔖 Estado Permiso":    _v("status", "—"),
+            "🔢 Permiso #":         _v("permit_no", "—"),
 
-            # ── PROPIETARIO ───────────────────────────
-            "👤 Propietario":       owner,
-            "📬 Dir. Postal":       owner_mail,
-            "📞 Tel. Propietario":  owner_phone if owner_phone != "—" else None,
+            # ── PROPIETARIO ─────────────────────────────────
+            "👤 Propietario":       _v("owner"),
+            "📬 Dir. Postal":       _v("owner_mail_addr"),
+            "📞 Tel. Propietario":  _v("owner_phone"),
 
-            # ── CONTRATISTA ───────────────────────────
-            "🔨 Contratista":       ctr_name,
-            "📞 Tel. Contratista":  ctr_phone if ctr_phone != "—" else None,
-            "📍 Dir. Contratista":  ctr_addr if ctr_addr != "—" else None,
-            "🪪 Lic. CSLB":         ctr_lic if ctr_lic != "—" else None,
-            "✅ Estado Lic.":       ctr_status if ctr_status != "—" else None,
-            "🔧 Clasificación":     ctr_types if ctr_types != "—" else None,
+            # ── CONTRATISTA ─────────────────────────────────
+            "🔨 Contratista":       _v("contractor"),
+            "📞 Tel. Contratista":  _v("contractor_phone"),
+            "📍 Dir. Contratista":  _v("contractor_addr"),
+            "🪪 Lic. CSLB":         _v("contractor_license"),
+            "✅ Estado Lic.":       _v("contractor_status"),
+            "🔧 Clasificación":     _v("contractor_types"),
 
-            # ── LINKS ─────────────────────────────────
-            "🗺️ Ver en Maps":       lead.get("maps_url") or None,
-            "🔗 Permiso Oficial":   lead.get("source_url", "—"),
+            # ── OTROS CONTACTOS DEL PERMISO ─────────────────
+            "📐 Aplicante":         _v("applicant"),
+            "📞 Tel. Aplicante":    _v("applicant_phone"),
+            "🖊️ Arquitecto":        _v("architect"),
+
+            # ── LINKS ───────────────────────────────────────
+            "🗺️ Ver en Maps":       _v("maps_url"),
+            "🔗 Permiso Oficial":   _v("source_url", "—"),
         }
 
-        # Limpiar campos None
+        # Eliminar campos None (vacíos)
         fields = {k: v for k, v in fields.items() if v is not None}
 
         send_lead(
