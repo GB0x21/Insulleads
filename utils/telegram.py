@@ -1,54 +1,61 @@
 """
-utils/telegram.py — Envía mensajes formateados a Telegram.
-Usa la API REST directamente (sin asyncio) para simplicidad.
+utils/telegram.py  v3.0
+Envía mensajes limpios a Telegram usando HTML (no Markdown).
+HTML evita los caracteres de escape que aparecían como  \. \# etc.
 """
 import os
 import requests
 from datetime import datetime
 
 
-def send_lead(agent_name: str, emoji: str, title: str, fields: dict, cta: str = ""):
+def send_lead(agent_name: str, emoji: str, title: str,
+              fields: dict, cta: str = "") -> dict:
     """
     Construye y envía un mensaje de lead a Telegram.
-
-    Args:
-        agent_name : nombre del agente (ej. "Permisos de Construcción")
-        emoji      : emoji identificador del agente
-        title      : título principal del lead
-        fields     : dict con los campos a mostrar
-        cta        : call-to-action opcional (ej. email del realtor)
+    Usa parse_mode=HTML para evitar problemas de escape.
+    Campos con valor None o vacío se omiten automáticamente.
     """
-    token   = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
 
     if not token or not chat_id:
-        raise EnvironmentError("Falta TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en .env")
+        raise EnvironmentError(
+            "Falta TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en .env"
+        )
 
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     lines = [
-        f"{emoji} *{agent_name.upper()}*",
-        f"━━━━━━━━━━━━━━━━━━━━",
-        f"📌 *{_esc(title)}*",
+        f"<b>{emoji} {agent_name.upper()}</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"<b>📌 {_h(title)}</b>",
         "",
     ]
 
     for key, value in fields.items():
-        if value:
-            lines.append(f"▸ *{_esc(key)}:* {_esc(str(value))}")
+        if value is None:
+            continue
+        val_str = str(value).strip()
+        if not val_str or val_str in ("—", "N/A", "None"):
+            continue
+        # Links como texto clicable
+        if val_str.startswith("http"):
+            lines.append(f"▸ <b>{_h(key)}:</b> <a href='{val_str}'>{_h(key)}</a>")
+        else:
+            lines.append(f"▸ <b>{_h(key)}:</b> {_h(val_str)}")
 
     if cta:
-        lines += ["", f"🎯 {_esc(cta)}"]
+        lines += ["", f"🎯 <i>{_h(cta)}</i>"]
 
-    lines += ["", f"🕐 _{now}_"]
+    lines += ["", f"<i>🕐 {now}</i>"]
 
     text = "\n".join(lines)
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown",
+        "chat_id":                  chat_id,
+        "text":                     text,
+        "parse_mode":               "HTML",
         "disable_web_page_preview": True,
     }
 
@@ -57,45 +64,61 @@ def send_lead(agent_name: str, emoji: str, title: str, fields: dict, cta: str = 
     return resp.json()
 
 
-def send_summary(stats: list):
-    """Envía un resumen diario de actividad."""
-    token   = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+def send_summary(stats: list) -> None:
+    """Envía resumen diario de actividad."""
+    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return
 
     lines = [
-        "📊 *RESUMEN DIARIO — INSUL-TECHS LEAD AGENTS*",
+        "📊 <b>RESUMEN DIARIO — INSUL-TECHS LEAD AGENTS</b>",
         "━━━━━━━━━━━━━━━━━━━━",
     ]
     total = 0
     for row in stats:
-        lines.append(f"▸ {row['agent']}: *{row['total']}* leads totales")
+        lines.append(
+            f"▸ {_h(str(row['agent']))}: <b>{row['total']}</b> leads totales"
+        )
         total += row["total"]
 
-    lines += ["", f"🏆 *Total acumulado: {total} leads*",
-              f"🕐 _{datetime.now().strftime('%d/%m/%Y %H:%M')}_"]
+    lines += [
+        "",
+        f"🏆 <b>Total acumulado: {total} leads</b>",
+        f"<i>🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}</i>",
+    ]
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, json={
-        "chat_id": chat_id,
-        "text": "\n".join(lines),
-        "parse_mode": "Markdown",
-    }, timeout=10)
-
-
-def send_error(agent_name: str, error: str):
-    """Notifica errores del sistema."""
-    token   = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    text = f"⚠️ *ERROR — {agent_name}*\n`{error[:300]}`"
     requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-        timeout=10
+        json={
+            "chat_id":    chat_id,
+            "text":       "\n".join(lines),
+            "parse_mode": "HTML",
+        },
+        timeout=10,
     )
 
 
-def _esc(text: str) -> str:
-    """Escapa caracteres especiales de Markdown de Telegram."""
-    for ch in ["_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", "."]:
-        text = text.replace(ch, f"\\{ch}")
-    return text
+def send_error(agent_name: str, error: str) -> None:
+    """Notifica errores del sistema."""
+    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return
+    text = f"⚠️ <b>ERROR — {_h(agent_name)}</b>\n<code>{_h(error[:300])}</code>"
+    requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+        timeout=10,
+    )
+
+
+def _h(text: str) -> str:
+    """Escapa caracteres HTML especiales."""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
