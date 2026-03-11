@@ -22,6 +22,7 @@ from utils.contact_enricher import (
     should_send_lead,
     contact_score_label,
     _parse_cost,
+    calc_lead_quality_score,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ class PermitsAgent(BaseAgent):
         enriched = []
         for lead in value_filtered:
             try:
-                lead = enrich_lead(lead)
+                lead = enrich_lead(lead, lead_type="permit")
             except Exception as e:
                 logger.warning(f"[permits] Enrich error {lead.get('id')}: {e}")
             enriched.append(lead)
@@ -77,7 +78,7 @@ class PermitsAgent(BaseAgent):
         for lead in enriched:
             quality = lead.get("lead_quality_score", 0)
             label   = lead.get("quality_label", "")
-            if should_send_lead(lead):
+            if should_send_lead(lead, lead_type="permit"):
                 good_leads.append(lead)
                 logger.info(
                     f"[permits] ✅ ENVIAR ({label} {quality}/10): "
