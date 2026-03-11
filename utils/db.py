@@ -87,3 +87,11 @@ def get_stats():
     """).fetchall()
     conn.close()
     return rows
+
+
+def reset_agent(agent_key: str):
+    """Borra el historial de un agente para re-procesar todos los leads."""
+    conn = get_conn()
+    conn.execute("DELETE FROM sent_leads WHERE agent=?", (agent_key,))
+    conn.commit()
+    conn.close()

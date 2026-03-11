@@ -213,3 +213,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── Agregar al parser en main() si se llama directamente ──
+# python main.py --reset solar   → Borra historial y re-procesa todos los leads del agente

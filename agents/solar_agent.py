@@ -1,55 +1,40 @@
 """
-agents/solar_agent.py
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AGENTE 2 — INSTALACIONES SOLARES
-
-Fuentes:
-  • SF DataSF (permisos filtrados por solar/photovoltaic)
-  • San Jose Open Data (misma lógica)
-  • California Solar Initiative (CPUC) — proyectos aprobados
-
-Lógica:
-  Propietario instala paneles solares → NECESITA mejorar aislamiento
-  para maximizar su retorno de inversión.
-  
-Pitch: "Acabas de instalar paneles — asegúrate de que el calor/frío
-no escape por el techo. Un buen aislamiento aumenta tu ahorro hasta 30%."
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+agents/solar_agent.py  v2.0
+Ventana: 3 meses — con enriquecimiento de contacto completo
 """
+import re
 import requests
 from datetime import datetime, timedelta
 from agents.base import BaseAgent
 from utils.telegram import send_lead
+from utils.contact_enricher import enrich_lead, contact_score_label
 
-SOLAR_KEYWORDS = [
-    "solar", "photovoltaic", "pv system", "pv panel",
-    "solar panel", "solar array", "battery storage", "powerwall"
-]
+SOLAR_KEYWORDS = ["solar", "photovoltaic", "pv system", "pv panel", "solar panel", "solar array", "battery storage", "powerwall"]
+LOOKBACK_DAYS = 90
 
 
 class SolarAgent(BaseAgent):
-    name      = "☀️ Instalaciones Solares"
+    name      = "Instalaciones Solares"
     emoji     = "☀️"
     agent_key = "solar"
 
-    def fetch_leads(self) -> list[dict]:
+    def fetch_leads(self) -> list:
         leads = []
         leads += self._fetch_sf_solar()
         leads += self._fetch_sj_solar()
-        leads += self._fetch_csi()
+        leads += self._fetch_oakland_solar()
         return leads
 
-    # ── San Francisco — permisos solar ────────────────────────────
-    def _fetch_sf_solar(self) -> list[dict]:
-        since = (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S")
+    def _fetch_sf_solar(self) -> list:
+        since = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
         url = "https://data.sfgov.org/resource/i98e-djp9.json"
         params = {
-            "$limit": 100,
-            "$where": f"filed_date >= '{since}' AND UPPER(description) LIKE '%SOLAR%'",
+            "$limit": 1000,
+            "$where": f"filed_date >= '{since}' AND (UPPER(description) LIKE '%SOLAR%' OR UPPER(description) LIKE '%PHOTOVOLTAIC%' OR UPPER(description) LIKE '%PV%')",
             "$order": "filed_date DESC",
         }
         try:
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=20)
             resp.raise_for_status()
             raw = resp.json()
         except Exception:
@@ -60,133 +45,134 @@ class SolarAgent(BaseAgent):
             desc = (item.get("description", "") or "").lower()
             if not any(kw in desc for kw in SOLAR_KEYWORDS):
                 continue
-
-            # Número de paneles estimado del texto
+            address = self._sf_address(item)
             kw_installed = self._extract_kw(desc)
-
-            leads.append({
-                "id":           f"sf_solar_{item.get('permit_number', '')}",
-                "city":         "San Francisco",
-                "address":      self._sf_address(item),
-                "description":  item.get("description", "")[:150],
-                "filed_date":   item.get("filed_date", "")[:10],
-                "owner":        item.get("owner_name", "No indicado"),
-                "owner_phone":  item.get("owner_phone", ""),
-                "contractor":   item.get("contractor_company_name", "No indicado"),
-                "kw_installed": kw_installed,
-                "permit_no":    item.get("permit_number", ""),
-            })
+            lead = {
+                "id":               "sf_solar_" + item.get("permit_number", ""),
+                "city":             "San Francisco",
+                "address":          address,
+                "description":      (item.get("description", "") or "")[:150],
+                "filed_date":       (item.get("filed_date", "") or "")[:10],
+                "owner":            item.get("owner_name", ""),
+                "owner_phone":      item.get("owner_phone", ""),
+                "contractor":       item.get("contractor_company_name", ""),
+                "contractor_phone": item.get("contractor_phone", ""),
+                "contractor_license": item.get("contractor_license_number", ""),
+                "kw_installed":     kw_installed,
+                "permit_no":        item.get("permit_number", ""),
+                "estimated_cost":   "$" + f"{float(item.get('estimated_cost') or 0):,.0f}" if item.get("estimated_cost") else "N/A",
+            }
+            lead = enrich_lead(lead)
+            leads.append(lead)
         return leads
 
-    # ── San José — permisos solar ──────────────────────────────────
-    def _fetch_sj_solar(self) -> list[dict]:
-        since = (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S")
+    def _fetch_sj_solar(self) -> list:
+        since = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
         url = "https://data.sanjoseca.gov/resource/5e7j-kygj.json"
         params = {
-            "$limit": 100,
+            "$limit": 1000,
             "$where": f"application_date >= '{since}' AND UPPER(work_description) LIKE '%SOLAR%'",
             "$order": "application_date DESC",
         }
         try:
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=20)
             resp.raise_for_status()
             raw = resp.json()
         except Exception:
             return []
-
         leads = []
         for item in raw:
             desc = (item.get("work_description", "") or "").lower()
             if not any(kw in desc for kw in SOLAR_KEYWORDS):
                 continue
-
-            leads.append({
-                "id":           f"sj_solar_{item.get('permit_number', '')}",
-                "city":         "San José",
-                "address":      item.get("address", "N/A").title(),
-                "description":  item.get("work_description", "")[:150],
-                "filed_date":   item.get("application_date", "")[:10],
-                "owner":        item.get("owner_name", "No indicado"),
-                "owner_phone":  "",
-                "contractor":   item.get("contractor_name", "No indicado"),
+            address = (item.get("address", "") or "N/A").title()
+            lead = {
+                "id": "sj_solar_" + item.get("permit_number", ""),
+                "city": "San Jose",
+                "address": address,
+                "description": desc[:150],
+                "filed_date": (item.get("application_date", "") or "")[:10],
+                "owner": item.get("owner_name", ""),
+                "owner_phone": item.get("owner_phone", ""),
+                "contractor": item.get("contractor_name", ""),
+                "contractor_phone": item.get("contractor_phone", ""),
+                "contractor_license": item.get("contractor_license", ""),
                 "kw_installed": self._extract_kw(desc),
-                "permit_no":    item.get("permit_number", ""),
-            })
+                "permit_no": item.get("permit_number", ""),
+                "estimated_cost": item.get("job_value", "N/A"),
+            }
+            lead = enrich_lead(lead)
+            leads.append(lead)
         return leads
 
-    # ── California Solar Initiative (CPUC) ─────────────────────────
-    def _fetch_csi(self) -> list[dict]:
-        """
-        API pública del CPUC — California Solar Initiative
-        Retorna proyectos residenciales aprobados recientemente.
-        Docs: https://data.ca.gov/dataset/california-solar-initiative-csi-program-data
-        """
-        url = "https://data.ca.gov/api/3/action/datastore_search"
+    def _fetch_oakland_solar(self) -> list:
+        since = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+        url = "https://data.oaklandca.gov/resource/p8h3-ngmm.json"
         params = {
-            "resource_id": "6da1b2e5-b5e6-4b5b-8ed5-e2a3db00e45a",  # dataset CSI
-            "limit": 50,
-            "filters": '{"county": "San Francisco"}',
-            "sort": "app_approved_date desc",
+            "$limit": 1000,
+            "$where": f"application_date >= '{since}' AND UPPER(description) LIKE '%SOLAR%'",
+            "$order": "application_date DESC",
         }
         try:
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=20)
             resp.raise_for_status()
-            records = resp.json().get("result", {}).get("records", [])
+            raw = resp.json()
         except Exception:
             return []
-
         leads = []
-        for item in records:
-            # Solo los aprobados en las últimas 72 horas
-            approved = item.get("app_approved_date", "")
-            if not approved:
+        for item in raw:
+            desc = (item.get("description", "") or "").lower()
+            if not any(kw in desc for kw in SOLAR_KEYWORDS):
                 continue
-
-            leads.append({
-                "id":           f"csi_{item.get('app_id', item.get('_id', ''))}",
-                "city":         item.get("city", "Bay Area"),
-                "address":      item.get("address", "No indicada"),
-                "description":  f"Sistema solar residencial aprobado",
-                "filed_date":   approved[:10],
-                "owner":        item.get("contact_name", "No indicado"),
-                "owner_phone":  item.get("phone", ""),
-                "contractor":   item.get("contractor_name", "No indicado"),
-                "kw_installed": f"{item.get('system_size_dc', '?')} kW",
-                "permit_no":    item.get("app_id", ""),
-            })
+            address = (item.get("address", "") or "N/A").title()
+            lead = {
+                "id": "oak_solar_" + item.get("permit_number", ""),
+                "city": "Oakland",
+                "address": address,
+                "description": desc[:150],
+                "filed_date": (item.get("application_date", "") or "")[:10],
+                "owner": item.get("owner_name", ""),
+                "owner_phone": item.get("owner_phone", ""),
+                "contractor": item.get("contractor_name", ""),
+                "contractor_phone": item.get("contractor_phone", ""),
+                "contractor_license": item.get("contractor_license", ""),
+                "kw_installed": self._extract_kw(desc),
+                "permit_no": item.get("permit_number", ""),
+                "estimated_cost": item.get("valuation", "N/A"),
+            }
+            lead = enrich_lead(lead)
+            leads.append(lead)
         return leads
 
-    # ── Helpers ───────────────────────────────────────────────────
     def _sf_address(self, item: dict) -> str:
-        parts = [item.get("street_number", ""),
-                 item.get("street_name", ""),
-                 item.get("street_suffix", "")]
+        parts = [item.get("street_number",""), item.get("street_name",""), item.get("street_suffix","")]
         return " ".join(p for p in parts if p).title()
 
     def _extract_kw(self, text: str) -> str:
-        """Intenta extraer kW del texto del permiso."""
-        import re
         m = re.search(r"(\d+\.?\d*)\s*kw", text, re.IGNORECASE)
-        return f"{m.group(1)} kW" if m else "No especificado"
+        return (m.group(1) + " kW") if m else "No especificado"
 
-    # ── Telegram notify ───────────────────────────────────────────
     def notify(self, lead: dict):
+        score_label = contact_score_label(lead.get("contact_score", 0))
         send_lead(
             agent_name="Instalaciones Solares",
             emoji="☀️",
-            title=f"{lead['city']} — {lead['address']}",
+            title=lead["city"] + " — " + lead["address"],
             fields={
-                "Sistema Instalado": lead["kw_installed"],
-                "Permiso #":         lead["permit_no"],
-                "Descripción":       lead["description"],
-                "Fecha Aprobación":  lead["filed_date"],
-                "Propietario":       lead["owner"],
-                "Teléfono":          lead.get("owner_phone") or "No disponible",
-                "Instalador Solar":  lead["contractor"],
+                "Sistema Solar":       lead["kw_installed"],
+                "Permiso #":           lead["permit_no"],
+                "Descripcion":         lead["description"],
+                "Fecha Aprobacion":    lead["filed_date"],
+                "Costo Estimado":      lead.get("estimated_cost", "N/A"),
+                "Propietario":         lead.get("owner") or "No encontrado",
+                "Dir. Postal Owner":   lead.get("owner_mail_addr") or "No disponible",
+                "Tel. Propietario":    lead.get("owner_phone") or "No disponible",
+                "Instalador Solar":    lead.get("contractor") or "No indicado",
+                "Tel. Instalador":     lead.get("contractor_phone") or "No disponible",
+                "Dir. Instalador":     lead.get("contractor_addr") or "No disponible",
+                "Lic. CSLB":           lead.get("contractor_license") or "N/A",
+                "Ver en Maps":         lead.get("maps_url") or "No disponible",
+                "Info Contacto":       score_label,
             },
-            cta=(
-                "💡 PITCH: 'Acabas de instalar paneles solares — un buen aislamiento "
-                "puede aumentar tu ahorro energético hasta un 30%. ¿Te interesa una "
-                "evaluación gratuita?'"
-            )
+            cta="PITCH: Acabas de instalar paneles solares — un buen aislamiento puede aumentar tu ahorro energetico hasta un 30%. Evaluacion GRATUITA?"
         )
