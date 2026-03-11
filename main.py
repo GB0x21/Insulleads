@@ -251,12 +251,5 @@ def _debug_address(arg: str):
     print(f"{'='*55}\n")
 
 
-def main():
-
-
-# ── Agregar al parser en main() si se llama directamente ──
-# python main.py --reset solar   → Borra historial y re-procesa todos los leads del agente
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
