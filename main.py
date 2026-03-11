@@ -159,9 +159,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Insul-Techs Lead Agents — Sistema de detección automática de leads"
     )
-    parser.add_argument("--test",  action="store_true", help="Prueba la conexión a Telegram")
-    parser.add_argument("--stats", action="store_true", help="Muestra estadísticas")
-    parser.add_argument("--run",   type=str,            help="Ejecuta un agente específico una vez (permits|solar|rodents|flood)")
+    parser.add_argument("--test",          action="store_true", help="Prueba la conexión a Telegram")
+    parser.add_argument("--stats",         action="store_true", help="Muestra estadísticas")
+    parser.add_argument("--run",           type=str, help="Ejecuta un agente una vez (permits|solar|rodents|flood)")
+    parser.add_argument("--debug-address", type=str, help="Prueba lookup de propietario. Ej: '85 Central Av,San Francisco'")
     args = parser.parse_args()
 
     init_db()
@@ -172,6 +173,10 @@ def main():
 
     if args.stats:
         show_stats()
+        return
+
+    if args.debug_address:
+        _debug_address(args.debug_address)
         return
 
     if args.run:
@@ -211,9 +216,47 @@ def main():
             time.sleep(60)
 
 
-if __name__ == "__main__":
-    main()
+def _debug_address(arg: str):
+    """
+    Prueba el lookup de propietario para una dirección.
+    Uso: python main.py --debug-address "85 Central Av,San Francisco"
+         python main.py --debug-address "3151 Franklin St,San Francisco"
+    """
+    from utils.address_lookup import lookup_owner_by_address, parse_address
+    logging.getLogger().setLevel(logging.DEBUG)
+
+    parts = arg.split(",", 1)
+    address = parts[0].strip()
+    city    = parts[1].strip() if len(parts) > 1 else "San Francisco"
+
+    print(f"\n{'='*55}")
+    print(f"  DEBUG ADDRESS LOOKUP")
+    print(f"  Dirección : {address}")
+    print(f"  Ciudad    : {city}")
+    print(f"{'='*55}")
+
+    parsed = parse_address(address)
+    print(f"\n  Parse:")
+    print(f"    num   = {parsed['num']}")
+    print(f"    name  = {parsed['name']}")
+    print(f"    types = {parsed['types']}")
+
+    print(f"\n  Buscando propietario...")
+    result = lookup_owner_by_address(address, city)
+
+    print(f"\n  Resultado:")
+    print(f"    owner_name      = {result.get('owner_name') or '(vacío)'}")
+    print(f"    mailing_address = {result.get('mailing_address') or '(vacío)'}")
+    print(f"    apn             = {result.get('apn') or '(vacío)'}")
+    print(f"{'='*55}\n")
+
+
+def main():
 
 
 # ── Agregar al parser en main() si se llama directamente ──
 # python main.py --reset solar   → Borra historial y re-procesa todos los leads del agente
+
+
+if __name__ == '__main__':
+    main()

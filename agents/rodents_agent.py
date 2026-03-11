@@ -6,7 +6,7 @@ import requests
 from datetime import datetime, timedelta
 from agents.base import BaseAgent
 from utils.telegram import send_lead
-from utils.contact_enricher import enrich_lead, geocode_address, contact_score_label
+from utils.contact_enricher import enrich_lead, contact_score_label
 
 RODENT_KEYWORDS = ["rodent","rat","mice","mouse","vermin","pest","infestation","roedor","raton","rata","plaga"]
 LOOKBACK_DAYS = 90
@@ -64,7 +64,7 @@ class RodentsAgent(BaseAgent):
                 "owner":         "",
                 "contractor":    "",
             }
-            lead = enrich_lead(lead)
+            lead = enrich_lead(lead, lead_type="rodent")
             # Para 311 el maps_url puede venir del lat/lon original
             if item.get("lat") and item.get("long") and not lead.get("maps_url"):
                 lead["maps_url"] = f"https://maps.google.com/?q={item['lat']},{item['long']}"
@@ -107,7 +107,7 @@ class RodentsAgent(BaseAgent):
                 "owner":         "",
                 "contractor":    "",
             }
-            lead = enrich_lead(lead)
+            lead = enrich_lead(lead, lead_type="rodent")
             leads.append(lead)
         return leads
 
@@ -143,27 +143,48 @@ class RodentsAgent(BaseAgent):
                 "owner":         "",
                 "contractor":    "",
             }
-            lead = enrich_lead(lead)
+            lead = enrich_lead(lead, lead_type="rodent")
             leads.append(lead)
         return leads
 
     def notify(self, lead: dict):
-        score_label = contact_score_label(lead.get("contact_score", 0))
+        contact_lbl = contact_score_label(lead.get("contact_score", 0))
+
+        def _v(key):
+            val = (lead.get(key) or "").strip()
+            return val if val and val.lower() not in (
+                "no indicado", "no encontrado", "n/a", "—", "") else None
+
+        fields = {
+            # ── REPORTE ──────────────────────────────────
+            "📋 Datos de Contacto": contact_lbl,
+            "🏠 Tipo de Reporte":   lead.get("category", "Roedores/Plagas"),
+            "📝 Descripcion":       lead.get("description", "Sin detalle"),
+            "🏘️ Barrio":            _v("neighborhood"),
+            "📅 Fecha Reporte":     _v("reported_date"),
+            "🔖 Estado":            _v("status"),
+
+            # ── PROPIETARIO ───────────────────────────────
+            "👤 Propietario":       _v("owner"),
+            "📬 Dir. Postal":       _v("owner_mail_addr"),
+            "📞 Tel. Propietario":  _v("owner_phone"),
+            "🔑 APN Parcela":       _v("apn"),
+
+            # ── LINK ──────────────────────────────────────
+            "🗺️ Ver en Maps":       _v("maps_url"),
+        }
+
+        # Eliminar campos None
+        fields = {k: v for k, v in fields.items() if v is not None}
+
         send_lead(
             agent_name="Reporte 311 Roedores/Plagas",
             emoji="🐀",
             title=lead["city"] + " — " + lead["address"],
-            fields={
-                "Tipo de Reporte":   lead["category"],
-                "Descripcion":       lead["description"],
-                "Barrio":            lead.get("neighborhood") or "No indicado",
-                "Fecha Reporte":     lead["reported_date"],
-                "Estado":            lead["status"],
-                "Propietario Real":  lead.get("owner") or "No encontrado",
-                "Dir. Postal Owner": lead.get("owner_mail_addr") or "No disponible",
-                "APN Parcela":       lead.get("apn") or "N/A",
-                "Ver en Maps":       lead.get("maps_url") or "No disponible",
-                "Info Contacto":     score_label,
-            },
-            cta="PITCH: Ofrecemos limpieza completa de atico, remocion de insulacion danada por roedores e instalacion nueva. Garantia incluida."
+            fields=fields,
+            cta=(
+                "PITCH: 'Ofrecemos limpieza completa de atico, remocion de "
+                "insulacion danada por roedores e instalacion nueva. "
+                "Garantia incluida.'"
+            ),
         )
