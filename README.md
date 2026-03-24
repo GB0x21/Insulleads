@@ -273,8 +273,4 @@ scraping ya que no tienen API pública, pero la estructura es la misma.
 
 ---
 
-## 📞 Soporte
 
-Insul-Techs, Inc.  
-admin@insultechs.com  
-www.insultechs.com
