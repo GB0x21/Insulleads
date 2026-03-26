@@ -1,255 +1,165 @@
 """
 main.py — Orquestador principal de Insul-Techs Lead Agents
-
-Ejecuta todos los agentes en sus intervalos configurados y
-envía un resumen diario a Telegram.
-
 Uso:
-    python main.py              # Inicia todos los agentes activos
-    python main.py --test       # Prueba la conexión a Telegram
-    python main.py --run solar  # Ejecuta solo el agente solar una vez
-    python main.py --stats      # Muestra estadísticas de leads
+  python main.py               # inicia todos los agentes
+  python main.py --test        # prueba conexión Telegram
+  python main.py --run permits # ejecuta un agente puntualmente
+  python main.py --stats       # muestra estadísticas de leads enviados
 """
 
 import os
 import sys
+import time
 import logging
 import argparse
 import schedule
-import time
-from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ── Logging ───────────────────────────────────────────────────────
-import colorlog
-
-handler = colorlog.StreamHandler()
-handler.setFormatter(colorlog.ColoredFormatter(
-    "%(log_color)s%(asctime)s [%(name)s] %(levelname)s%(reset)s — %(message)s",
-    datefmt="%H:%M:%S",
-    log_colors={
-        "DEBUG":    "cyan",
-        "INFO":     "green",
-        "WARNING":  "yellow",
-        "ERROR":    "red",
-        "CRITICAL": "bold_red",
-    }
-))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logger = logging.getLogger("main")
 
-# ── Importar agentes ──────────────────────────────────────────────
+# ── Imports internos ──────────────────────────────────────────────
+from utils.telegram import send_message
+from utils.db import init_db, get_stats
 from agents.permits_agent import PermitsAgent
-from agents.solar_agent   import SolarAgent
+from agents.solar_agent import SolarAgent
 from agents.rodents_agent import RodentsAgent
-from agents.flood_agent   import FloodAgent
-from utils.db             import init_db, get_stats
-from utils.telegram       import send_lead, send_summary, send_error
+from agents.flood_agent import FloodAgent
 
 # ── Registro de agentes ───────────────────────────────────────────
 AGENTS = {
     "permits": {
-        "class":    PermitsAgent,
-        "env_key":  "AGENT_PERMITS",
-        "interval": "INTERVAL_PERMITS",
+        "class":            PermitsAgent,
+        "env_key":          "AGENT_PERMITS",
+        "interval_key":     "INTERVAL_PERMITS",
         "default_interval": 60,
     },
     "solar": {
-        "class":    SolarAgent,
-        "env_key":  "AGENT_SOLAR",
-        "interval": "INTERVAL_SOLAR",
+        "class":            SolarAgent,
+        "env_key":          "AGENT_SOLAR",
+        "interval_key":     "INTERVAL_SOLAR",
         "default_interval": 60,
     },
     "rodents": {
-        "class":    RodentsAgent,
-        "env_key":  "AGENT_RODENTS",
-        "interval": "INTERVAL_RODENTS",
+        "class":            RodentsAgent,
+        "env_key":          "AGENT_RODENTS",
+        "interval_key":     "INTERVAL_RODENTS",
         "default_interval": 120,
     },
     "flood": {
-        "class":    FloodAgent,
-        "env_key":  "AGENT_FLOOD",
-        "interval": "INTERVAL_FLOOD",
+        "class":            FloodAgent,
+        "env_key":          "AGENT_FLOOD",
+        "interval_key":     "INTERVAL_FLOOD",
         "default_interval": 30,
     },
 }
 
 
+def _is_enabled(env_key: str) -> bool:
+    return os.getenv(env_key, "true").lower() not in ("false", "0", "no")
+
+
 def run_agent(agent_key: str):
-    """Ejecuta un agente específico de forma segura."""
-    cfg = AGENTS.get(agent_key)
-    if not cfg:
-        logger.error(f"Agente '{agent_key}' no encontrado.")
-        return
+    """Instancia y ejecuta un agente por su clave."""
+    cfg   = AGENTS[agent_key]
     agent = cfg["class"]()
-    logger.info(f"▶ Ejecutando: {agent.name}")
-    new = agent.run()
-    logger.info(f"✅ {agent.name} — {new} nuevos leads enviados")
+    try:
+        leads = agent.fetch_leads()
+        new   = 0
+        for lead in leads:
+            if agent.send_if_new(lead):
+                new += 1
+        logger.info(f"[{agent_key}] {len(leads)} leads encontrados, {new} nuevos enviados")
+    except Exception as e:
+        logger.error(f"[{agent_key}] Error: {e}", exc_info=True)
 
 
-def schedule_agents():
-    """Programa todos los agentes activos según su intervalo."""
+def cmd_test():
+    """Envía un mensaje de prueba a Telegram."""
+    logger.info("Enviando mensaje de prueba a Telegram...")
+    ok = send_message(
+        "✅ *Insul-Techs Lead Agents* conectado correctamente.\n"
+        "El bot está listo para enviar leads."
+    )
+    if ok:
+        logger.info("✅ Mensaje de prueba enviado. Revisa tu grupo de Telegram.")
+    else:
+        logger.error("❌ Falló el envío. Verifica TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en .env")
+
+
+def cmd_stats():
+    """Muestra estadísticas desde la base de datos."""
+    stats = get_stats()
+    print("\n📊 Estadísticas de leads enviados\n" + "─" * 40)
+    total = 0
+    for agent_key, count in sorted(stats.items(), key=lambda x: -x[1]):
+        print(f"  {agent_key:<20} {count:>6} leads")
+        total += count
+    print("─" * 40)
+    print(f"  {'TOTAL':<20} {total:>6} leads\n")
+
+
+def cmd_run_one(agent_key: str):
+    """Ejecuta un único agente inmediatamente."""
+    if agent_key not in AGENTS:
+        print(f"❌ Agente desconocido: '{agent_key}'. Opciones: {list(AGENTS)}")
+        sys.exit(1)
+    logger.info(f"Ejecutando agente '{agent_key}' manualmente...")
+    run_agent(agent_key)
+
+
+def cmd_start():
+    """Inicia todos los agentes habilitados con sus intervalos configurados."""
+    init_db()
+    enabled = []
+
     for key, cfg in AGENTS.items():
-        env_active = os.getenv(cfg["env_key"], "true").lower()
-        if env_active != "true":
-            logger.info(f"⏸  {key} desactivado en .env")
+        if not _is_enabled(cfg["env_key"]):
+            logger.info(f"[{key}] Desactivado en .env — omitido")
             continue
 
-        minutes = int(os.getenv(cfg["interval"], cfg["default_interval"]))
-        agent_cls = cfg["class"]
-        agent_name = agent_cls.name if hasattr(agent_cls, "name") else key
+        interval = int(os.getenv(cfg["interval_key"], cfg["default_interval"]))
+        enabled.append(key)
 
-        # Primera ejecución inmediata
-        schedule.every(minutes).minutes.do(run_agent, agent_key=key)
-        logger.info(f"🕐 {key} programado cada {minutes} minutos")
+        # Ejecutar inmediatamente al arrancar
+        run_agent(key)
 
-    # Resumen diario a las 8am
-    schedule.every().day.at("08:00").do(send_daily_summary)
-    logger.info("📊 Resumen diario programado para las 08:00")
+        # Programar ejecuciones periódicas
+        schedule.every(interval).minutes.do(run_agent, agent_key=key)
+        logger.info(f"[{key}] Programado cada {interval} min")
 
-
-def send_daily_summary():
-    stats = get_stats()
-    send_summary(stats)
-
-
-def test_telegram():
-    """Prueba que Telegram esté correctamente configurado."""
-    logger.info("Enviando mensaje de prueba a Telegram...")
-    try:
-        send_lead(
-            agent_name="Sistema — Prueba de Conexión",
-            emoji="🤖",
-            title="Insul-Techs Lead Agents — ACTIVO",
-            fields={
-                "Estado":    "✅ Conexión exitosa",
-                "Agentes":   ", ".join(AGENTS.keys()),
-                "Hora":      datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                "Servidor":  os.uname().nodename if hasattr(os, "uname") else "Windows",
-            },
-            cta="El sistema está listo para enviar leads automáticamente."
-        )
-        logger.info("✅ Mensaje de prueba enviado correctamente.")
-    except Exception as e:
-        logger.error(f"❌ Error de Telegram: {e}")
-        logger.error("Verifica TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en tu .env")
-
-
-def show_stats():
-    """Muestra estadísticas de leads enviados."""
-    init_db()
-    stats = get_stats()
-    if not stats:
-        print("\n📭 Aún no hay leads registrados.\n")
-        return
-    print("\n📊 ESTADÍSTICAS DE LEADS ENVIADOS")
-    print("=" * 50)
-    total = 0
-    for row in stats:
-        print(f"  {row['agent']:<20} → {row['total']:>4} leads  (último: {row['last_lead'][:10]})")
-        total += row["total"]
-    print("=" * 50)
-    print(f"  {'TOTAL':<20} → {total:>4} leads")
-    print()
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Insul-Techs Lead Agents — Sistema de detección automática de leads"
-    )
-    parser.add_argument("--test",          action="store_true", help="Prueba la conexión a Telegram")
-    parser.add_argument("--stats",         action="store_true", help="Muestra estadísticas")
-    parser.add_argument("--run",           type=str, help="Ejecuta un agente una vez (permits|solar|rodents|flood)")
-    parser.add_argument("--debug-address", type=str, help="Prueba lookup de propietario. Ej: '85 Central Av,San Francisco'")
-    args = parser.parse_args()
-
-    init_db()
-
-    if args.test:
-        test_telegram()
-        return
-
-    if args.stats:
-        show_stats()
-        return
-
-    if args.debug_address:
-        _debug_address(args.debug_address)
-        return
-
-    if args.run:
-        run_agent(args.run)
-        return
-
-    # ── Modo normal: programar y correr indefinidamente ──────────
-    logger.info("=" * 60)
-    logger.info("  INSUL-TECHS LEAD AGENTS — INICIANDO")
-    logger.info("=" * 60)
-
-    # Verificar credenciales
-    if not os.getenv("TELEGRAM_BOT_TOKEN"):
-        logger.error("❌ TELEGRAM_BOT_TOKEN no configurado. Verifica tu .env")
+    if not enabled:
+        logger.warning("No hay agentes habilitados. Revisa tu .env")
         sys.exit(1)
 
-    schedule_agents()
-
-    # Ejecutar todos los agentes inmediatamente al inicio
-    logger.info("🚀 Ejecutando todos los agentes por primera vez...")
-    for key in AGENTS:
-        env_active = os.getenv(AGENTS[key]["env_key"], "true").lower()
-        if env_active == "true":
-            run_agent(key)
-
-    logger.info("🔄 Sistema en ejecución. Ctrl+C para detener.\n")
+    logger.info(f"🚀 {len(enabled)} agente(s) corriendo: {', '.join(enabled)}")
 
     while True:
-        try:
-            schedule.run_pending()
-            time.sleep(30)
-        except KeyboardInterrupt:
-            logger.info("\n⏹  Sistema detenido manualmente.")
-            break
-        except Exception as e:
-            logger.error(f"Error en el loop principal: {e}")
-            time.sleep(60)
+        schedule.run_pending()
+        time.sleep(30)
 
 
-def _debug_address(arg: str):
-    """
-    Prueba el lookup de propietario para una dirección.
-    Uso: python main.py --debug-address "85 Central Av,San Francisco"
-         python main.py --debug-address "3151 Franklin St,San Francisco"
-    """
-    from utils.address_lookup import lookup_owner_by_address, parse_address
-    logging.getLogger().setLevel(logging.DEBUG)
-
-    parts = arg.split(",", 1)
-    address = parts[0].strip()
-    city    = parts[1].strip() if len(parts) > 1 else "San Francisco"
-
-    print(f"\n{'='*55}")
-    print(f"  DEBUG ADDRESS LOOKUP")
-    print(f"  Dirección : {address}")
-    print(f"  Ciudad    : {city}")
-    print(f"{'='*55}")
-
-    parsed = parse_address(address)
-    print(f"\n  Parse:")
-    print(f"    num   = {parsed['num']}")
-    print(f"    name  = {parsed['name']}")
-    print(f"    types = {parsed['types']}")
-
-    print(f"\n  Buscando propietario...")
-    result = lookup_owner_by_address(address, city)
-
-    print(f"\n  Resultado:")
-    print(f"    owner_name      = {result.get('owner_name') or '(vacío)'}")
-    print(f"    mailing_address = {result.get('mailing_address') or '(vacío)'}")
-    print(f"    apn             = {result.get('apn') or '(vacío)'}")
-    print(f"{'='*55}\n")
-
-
+# ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Insul-Techs Lead Agents")
+    parser.add_argument("--test",  action="store_true", help="Probar conexión Telegram")
+    parser.add_argument("--stats", action="store_true", help="Ver estadísticas")
+    parser.add_argument("--run",   metavar="AGENT",     help="Ejecutar un agente específico")
+    args = parser.parse_args()
+
+    if args.test:
+        cmd_test()
+    elif args.stats:
+        cmd_stats()
+    elif args.run:
+        init_db()
+        cmd_run_one(args.run)
+    else:
+        cmd_start()
