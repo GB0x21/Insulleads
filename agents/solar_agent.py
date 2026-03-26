@@ -1,8 +1,11 @@
 """
-agents/solar_agent.py
+agents/solar_agent.py  v2
+━━━━━━━━━━━━━━━━━━━━━━━
 ☀️ Instalaciones Solares — Bay Area
-Fuentes: Permisos solares de SF DataSF + California Solar Initiative (CSI)
+Fuentes: SF DataSF + San Jose CKAN
 Solar nuevo = necesitan mejorar aislamiento para maximizar ahorro energético
+
+✅ FIX v2: removido Oakland (dataset Socrata 404, migró a Accela)
 """
 
 import logging
@@ -15,9 +18,11 @@ from utils.contacts_loader import load_all_contacts, lookup_contact
 logger = logging.getLogger(__name__)
 
 SOLAR_SOURCES = [
+    # ── San Francisco — Socrata ───────────────────────────────────
     {
-        "city": "San Francisco",
-        "url":  "https://data.sfgov.org/resource/i98e-djp9.json",
+        "city":   "San Francisco",
+        "engine": "socrata",
+        "url":    "https://data.sfgov.org/resource/i98e-djp9.json",
         "params": {
             "$limit": 30,
             "$order": "filed_date DESC",
@@ -41,32 +46,50 @@ SOLAR_SOURCES = [
             "value":      "estimated_cost",
         },
     },
+    # ── San Jose — CKAN JSON ──────────────────────────────────────
     {
-        "city": "Oakland",
-        "url":  "https://data.oaklandca.gov/resource/p8h7-gzqg.json",
-        "params": {
-            "$limit": 30,
-            "$order": "applied_date DESC",
-            "$where": (
-                "status IN('ISSUED','FINALED') AND "
-                "(UPPER(description) LIKE '%SOLAR%' OR "
-                " UPPER(description) LIKE '%PHOTOVOLTAIC%')"
-            ),
-        },
+        "city":   "San Jose",
+        "engine": "ckan_json",
+        "url":    "https://data.sanjoseca.gov/datastore/dump/761b7ae8-3be1-4ad6-923d-c7af6404a904",
+        "params": {"format": "json"},
+        "filter_fn": lambda r: any(kw in (r.get("WORKDESCRIPTION") or "").upper()
+                                   for kw in ["SOLAR", "PHOTOVOLTAIC", "PV"]),
         "field_map": {
-            "id":         "permit_number",
-            "address":    "site_address",
+            "id":         "FOLDERNUMBER",
+            "address":    "gx_location",
             "address2":   None,
-            "desc":       "description",
-            "status":     "status",
-            "date":       "applied_date",
-            "contractor": "primary_contractor",
-            "lic":        "contractor_lic_number",
-            "owner":      "owner_name",
-            "value":      "valuation",
+            "desc":       "WORKDESCRIPTION",
+            "status":     "Status",
+            "date":       "ISSUEDATE",
+            "contractor": "CONTRACTOR",
+            "lic":        None,
+            "owner":      "OWNERNAME",
+            "value":      "PERMITVALUATION",
         },
     },
 ]
+
+
+def _fetch_records(source: dict) -> list[dict]:
+    """Descarga registros según el engine de la fuente."""
+    resp = requests.get(source["url"], params=source["params"], timeout=30,
+                        headers={"Accept": "application/json"})
+    resp.raise_for_status()
+    data = resp.json()
+
+    if source["engine"] == "ckan_json":
+        fields = [f["id"] for f in data.get("fields", [])]
+        raw    = data.get("records", [])
+        result = []
+        for row in raw:
+            rec = dict(zip(fields, row)) if isinstance(row, list) else row
+            # Filtro solar inline si viene definido
+            if source.get("filter_fn") and not source["filter_fn"](rec):
+                continue
+            result.append(rec)
+        return result
+    else:
+        return data if isinstance(data, list) else []
 
 
 class SolarAgent(BaseAgent):
@@ -76,24 +99,21 @@ class SolarAgent(BaseAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._contacts = load_all_contacts()
+        self._contacts = load_all_contacts()  # cache de módulo
 
     def fetch_leads(self) -> list:
         leads = []
         for src in SOLAR_SOURCES:
             try:
-                resp = requests.get(src["url"], params=src["params"], timeout=15,
-                                    headers={"Accept": "application/json"})
-                resp.raise_for_status()
-                records = resp.json()
-                if not isinstance(records, list):
-                    continue
-                fm = src["field_map"]
+                records = _fetch_records(src)
+                fm  = src["field_map"]
                 get = lambda r, k: r.get(fm.get(k) or "", "") or ""
+
                 for raw in records:
                     addr = get(raw, "address")
                     if fm.get("address2") and raw.get(fm["address2"]):
                         addr = f"{addr} {raw[fm['address2']]}".strip()
+
                     lead = {
                         "id":          f"{src['city']}_{get(raw,'id')}",
                         "city":        src["city"],
@@ -108,10 +128,11 @@ class SolarAgent(BaseAgent):
                     }
                     match = lookup_contact(lead["contractor"], self._contacts)
                     if match:
-                        lead["contact_phone"] = match.get("phone", "")
-                        lead["contact_email"] = match.get("email", "")
+                        lead["contact_phone"]  = match.get("phone", "")
+                        lead["contact_email"]  = match.get("email", "")
                         lead["contact_source"] = f"CSV ({match['source']})"
                     leads.append(lead)
+
                 logger.info(f"[Solar/{src['city']}] {len(records)} permisos solares")
             except Exception as e:
                 logger.error(f"[Solar/{src['city']}] Error: {e}")

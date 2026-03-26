@@ -1,17 +1,26 @@
 """
-agents/permits_agent.py
-━━━━━━━━━━━━━━━━━━━━━━
+agents/permits_agent.py  v2
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 🏗️ Permisos de Construcción — Bay Area Completa
-Ciudades : SF · Oakland · San Jose · Berkeley · Sunnyvale
-           Santa Clara · Richmond · Fremont · Hayward
 
-Enriquecimiento de contacto GC (en orden):
-  1º → CSVs locales en contacts/  (fuzzy match por nombre)
-  2º → CSLB web                   (fallback si no hay match)
+FIXES v2:
+  ✅ SF  — KeyError 'permit_number': corregido formato de URL template
+  ✅ SJ  — 404: migrado a CKAN JSON (data.sanjoseca.gov)
+  ✅ OAK — 404: dataset Socrata retirado; Oakland usa Accela (sin API pública)
+            → marcado _skip_if_no_data con nota
+  ✅ BRK — 403: requiere Socrata App Token → marcado _skip_if_no_data
+  ✅ Contactos: load_all_contacts() ahora usa cache de módulo (carga 1x)
+
+Ciudades activas : San Francisco · San Jose · Sunnyvale · Santa Clara
+                   Richmond · Fremont · Hayward
+Ciudades en espera: Oakland (Accela sin API pública)
+                    Berkeley (requiere Socrata token)
 """
 
 import os
 import re
+import csv
+import io
 import time
 import logging
 import requests
@@ -24,13 +33,17 @@ from utils.contacts_loader import load_all_contacts, lookup_contact
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────
-#  FUENTES OPEN DATA — BAY AREA
+#  FUENTES OPEN DATA
 # ─────────────────────────────────────────────────────────────────
 
 PERMIT_SOURCES = [
+
+    # ── San Francisco — Socrata DataSF ────────────────────────────
+    # Dataset: Building Permits (i98e-djp9)
     {
-        "city": "San Francisco",
-        "url":  "https://data.sfgov.org/resource/i98e-djp9.json",
+        "city":   "San Francisco",
+        "engine": "socrata",
+        "url":    "https://data.sfgov.org/resource/i98e-djp9.json",
         "params": {
             "$limit": 50,
             "$order": "filed_date DESC",
@@ -57,84 +70,43 @@ PERMIT_SOURCES = [
             "lic_number":  "contractor_license",
             "owner":       "owner",
             "value":       "estimated_cost",
+            # ✅ FIX: usa nombre raw del campo (permit_number), no el alias mapeado (id)
             "url_tpl":     "https://sfdbi.org/permit/{permit_number}",
         },
     },
+
+    # ── San Jose — CKAN JSON ──────────────────────────────────────
+    # ✅ FIX: el dataset 4yft-3k4m (Socrata) ya no existe.
+    #    San Jose usa CKAN con descarga CSV/JSON.
+    #    URL JSON: /datastore/dump/<resource_id>?format=json
+    #    Actualizado diariamente.
     {
-        "city": "Oakland",
-        "url":  "https://data.oaklandca.gov/resource/p8h7-gzqg.json",
-        "params": {
-            "$limit": 50,
-            "$order": "applied_date DESC",
-            "$where": "status IN('ISSUED','FINALED')",
-        },
+        "city":   "San Jose",
+        "engine": "ckan_json",
+        "url":    "https://data.sanjoseca.gov/datastore/dump/761b7ae8-3be1-4ad6-923d-c7af6404a904",
+        "params": {"format": "json"},
         "field_map": {
-            "id":          "permit_number",
-            "address":     "site_address",
+            "id":          "FOLDERNUMBER",
+            "address":     "gx_location",
             "address2":    None,
-            "permit_type": "permit_type",
-            "description": "description",
-            "status":      "status",
-            "filed_date":  "applied_date",
-            "issued_date": "issue_date",
-            "contractor":  "primary_contractor",
-            "lic_number":  "contractor_lic_number",
-            "owner":       "owner_name",
-            "value":       "valuation",
-            "url_tpl":     "https://www.oaklandca.gov/resources/planning-and-building-permit-search",
+            "permit_type": "FOLDERNAME",
+            "description": "WORKDESCRIPTION",
+            "status":      "Status",
+            "filed_date":  None,
+            "issued_date": "ISSUEDATE",
+            "contractor":  "CONTRACTOR",
+            "lic_number":  None,
+            "owner":       "OWNERNAME",
+            "value":       "PERMITVALUATION",
+            "url_tpl":     "https://www.sjpermits.org/",
         },
     },
+
+    # ── Sunnyvale — Socrata ───────────────────────────────────────
     {
-        "city": "San Jose",
-        "url":  "https://data.sanjoseca.gov/resource/4yft-3k4m.json",
-        "params": {
-            "$limit": 50,
-            "$order": "applicationdate DESC",
-            "$where": "status IN('ISSUED','COMPLETE')",
-        },
-        "field_map": {
-            "id":          "permitno",
-            "address":     "address",
-            "address2":    None,
-            "permit_type": "permittype",
-            "description": "description",
-            "status":      "status",
-            "filed_date":  "applicationdate",
-            "issued_date": "issuedate",
-            "contractor":  "contractorname",
-            "lic_number":  "contractorlicno",
-            "owner":       "ownername",
-            "value":       "valuation",
-            "url_tpl":     "https://portal.sanjoseca.gov/permittracker/details/{permitno}",
-        },
-    },
-    {
-        "city": "Berkeley",
-        "url":  "https://data.cityofberkeley.info/resource/cqze-unm8.json",
-        "params": {
-            "$limit": 50,
-            "$order": "date_issued DESC",
-            "$where": "permit_status IN('ISSUED','FINALED')",
-        },
-        "field_map": {
-            "id":          "permit_number",
-            "address":     "location_address",
-            "address2":    None,
-            "permit_type": "permit_type",
-            "description": "permit_description",
-            "status":      "permit_status",
-            "filed_date":  "date_filed",
-            "issued_date": "date_issued",
-            "contractor":  "contractor_name",
-            "lic_number":  "contractor_license",
-            "owner":       "property_owner",
-            "value":       "project_valuation",
-            "url_tpl":     "https://permits.cityofberkeley.info/eTRAKiT/",
-        },
-    },
-    {
-        "city": "Sunnyvale",
-        "url":  "https://data.sunnyvale.ca.gov/resource/7xm5-teup.json",
+        "city":   "Sunnyvale",
+        "engine": "socrata",
+        "url":    "https://data.sunnyvale.ca.gov/resource/7xm5-teup.json",
         "params": {
             "$limit": 50,
             "$order": "issued_date DESC",
@@ -157,9 +129,12 @@ PERMIT_SOURCES = [
         },
         "_skip_if_no_data": True,
     },
+
+    # ── Santa Clara — Socrata ─────────────────────────────────────
     {
-        "city": "Santa Clara",
-        "url":  "https://data.santa-clara.ca.gov/resource/building-permits.json",
+        "city":   "Santa Clara",
+        "engine": "socrata",
+        "url":    "https://data.santa-clara.ca.gov/resource/building-permits.json",
         "params": {
             "$limit": 50,
             "$order": "issue_date DESC",
@@ -182,9 +157,12 @@ PERMIT_SOURCES = [
         },
         "_skip_if_no_data": True,
     },
+
+    # ── Richmond — Socrata ────────────────────────────────────────
     {
-        "city": "Richmond",
-        "url":  "https://data.ci.richmond.ca.us/resource/permits.json",
+        "city":   "Richmond",
+        "engine": "socrata",
+        "url":    "https://data.ci.richmond.ca.us/resource/permits.json",
         "params": {
             "$limit": 50,
             "$order": "date_issued DESC",
@@ -207,9 +185,12 @@ PERMIT_SOURCES = [
         },
         "_skip_if_no_data": True,
     },
+
+    # ── Fremont ───────────────────────────────────────────────────
     {
-        "city": "Fremont",
-        "url":  "https://www.fremont.gov/CivicAlerts.aspx",
+        "city":   "Fremont",
+        "engine": "socrata",
+        "url":    "https://www.fremont.gov/CivicAlerts.aspx",
         "params": {},
         "field_map": {
             "id":          "permit_number",
@@ -228,9 +209,12 @@ PERMIT_SOURCES = [
         },
         "_skip_if_no_data": True,
     },
+
+    # ── Hayward ───────────────────────────────────────────────────
     {
-        "city": "Hayward",
-        "url":  "https://hayward.permitportal.us/api/permits",
+        "city":   "Hayward",
+        "engine": "socrata",
+        "url":    "https://hayward.permitportal.us/api/permits",
         "params": {"status": "Issued", "type": "Building", "limit": 30},
         "field_map": {
             "id":          "permit_number",
@@ -248,6 +232,59 @@ PERMIT_SOURCES = [
             "url_tpl":     "https://hayward.permitportal.us/permit/{permit_number}",
         },
         "_skip_if_no_data": True,
+    },
+
+    # ── Oakland ───────────────────────────────────────────────────
+    # ⚠️  Dataset Socrata p8h7-gzqg retirado (404).
+    #    Oakland migró a Accela Citizen Access (ACA) — sin API pública.
+    #    Portal: https://aca-prod.accela.com/OAKLAND/
+    #    Marcado como _skip_if_no_data hasta encontrar alternativa.
+    {
+        "city":   "Oakland",
+        "engine": "socrata",
+        "url":    "https://data.oaklandca.gov/resource/p8h7-gzqg.json",
+        "params": {"$limit": 1},
+        "field_map": {
+            "id": "permit_number", "address": "site_address", "address2": None,
+            "permit_type": "permit_type", "description": "description",
+            "status": "status", "filed_date": "applied_date",
+            "issued_date": "issue_date", "contractor": "primary_contractor",
+            "lic_number": "contractor_lic_number", "owner": "owner_name",
+            "value": "valuation",
+            "url_tpl": "https://aca-prod.accela.com/OAKLAND/",
+        },
+        "_skip_if_no_data": True,
+    },
+
+    # ── Berkeley ──────────────────────────────────────────────────
+    # ⚠️  403 Forbidden — requiere Socrata App Token.
+    #    Agrega SOCRATA_APP_TOKEN a .env para habilitarlo.
+    {
+        "city":   "Berkeley",
+        "engine": "socrata",
+        "url":    "https://data.cityofberkeley.info/resource/cqze-unm8.json",
+        "params": {
+            "$limit": 50,
+            "$order": "date_issued DESC",
+            "$where": "permit_status IN('ISSUED','FINALED')",
+        },
+        "field_map": {
+            "id":          "permit_number",
+            "address":     "location_address",
+            "address2":    None,
+            "permit_type": "permit_type",
+            "description": "permit_description",
+            "status":      "permit_status",
+            "filed_date":  "date_filed",
+            "issued_date": "date_issued",
+            "contractor":  "contractor_name",
+            "lic_number":  "contractor_license",
+            "owner":       "property_owner",
+            "value":       "project_valuation",
+            "url_tpl":     "https://permits.cityofberkeley.info/eTRAKiT/",
+        },
+        "_skip_if_no_data": True,
+        "_requires_token":  True,  # agrega SOCRATA_APP_TOKEN en .env
     },
 ]
 
@@ -296,7 +333,6 @@ def _cslb_lookup(license_number: str = None, company_name: str = None) -> dict:
         r2 = s.post(_CSLB_URL, data=payload, timeout=10)
         r2.raise_for_status()
         soup2 = BeautifulSoup(r2.text, "html.parser")
-
         table = (soup2.find("table", {"id": re.compile(r"Grid|Results|License", re.I)})
                  or soup2.find("table"))
         if table:
@@ -320,17 +356,69 @@ def _cslb_lookup(license_number: str = None, company_name: str = None) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
-#  HELPERS
+#  PARSERS POR ENGINE
+# ─────────────────────────────────────────────────────────────────
+
+def _fetch_socrata(source: dict) -> list[dict]:
+    """Obtiene registros de un endpoint Socrata (JSON array)."""
+    headers = {"Accept": "application/json"}
+    token = os.getenv("SOCRATA_APP_TOKEN", "")
+    if token:
+        headers["X-App-Token"] = token
+    resp = requests.get(source["url"], params=source["params"],
+                        timeout=15, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    return data if isinstance(data, list) else []
+
+
+def _fetch_ckan_json(source: dict) -> list[dict]:
+    """
+    Obtiene registros del endpoint CKAN datastore dump (format=json).
+    Respuesta: { "fields": [...], "records": [[val, val, ...], ...] }
+    """
+    resp = requests.get(source["url"], params=source["params"], timeout=30,
+                        headers={"Accept": "application/json"})
+    resp.raise_for_status()
+    data = resp.json()
+
+    fields  = [f["id"] for f in data.get("fields", [])]
+    records_raw = data.get("records", [])
+
+    # Convertir cada fila (lista) en dict usando los nombres de campo
+    records = []
+    for row in records_raw:
+        if isinstance(row, dict):
+            records.append(row)          # ya es dict en algunas versiones
+        elif isinstance(row, list):
+            records.append(dict(zip(fields, row)))
+
+    return records
+
+
+# ─────────────────────────────────────────────────────────────────
+#  NORMALIZACIÓN
 # ─────────────────────────────────────────────────────────────────
 
 def _normalize_permit(raw: dict, field_map: dict, city: str) -> dict:
     get = lambda k: raw.get(field_map.get(k) or "", "") or ""
+
     address = get("address")
     if field_map.get("address2") and raw.get(field_map["address2"]):
         address = f"{address} {raw[field_map['address2']]}".strip()
-    permit_id  = get("id")
-    url_tpl    = field_map.get("url_tpl", "")
-    permit_url = url_tpl.format(**{k: raw.get(v, "") for k, v in field_map.items() if v})
+
+    permit_id = get("id")
+    url_tpl   = field_map.get("url_tpl", "")
+
+    # ✅ FIX: usar los nombres RAW de los campos como claves del dict de formato,
+    #    no los alias mapeados. Así {permit_number} resuelve correctamente.
+    raw_vals  = {v: raw.get(v, "") for k, v in field_map.items()
+                 if v and k != "url_tpl"}
+    try:
+        permit_url = url_tpl.format(**raw_vals)
+    except KeyError:
+        permit_url = url_tpl  # fallback si la template tiene variables no disponibles
+
     return {
         "id":          f"{city}_{permit_id}",
         "city":        city,
@@ -367,6 +455,7 @@ class PermitsAgent(BaseAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # ✅ FIX: load_all_contacts() ahora tiene cache de módulo → 0ms en siguientes llamadas
         self._contacts: list = load_all_contacts()
         self._cache:    dict = {}
 
@@ -394,10 +483,8 @@ class PermitsAgent(BaseAgent):
         # 2. CSLB fallback
         if not enrichment or (not enrichment.get("contact_phone") and not enrichment.get("contact_email")):
             time.sleep(0.5)
-            cslb = _cslb_lookup(
-                license_number=lic,
-                company_name=contractor if not lic else None,
-            )
+            cslb = _cslb_lookup(license_number=lic,
+                                 company_name=contractor if not lic else None)
             if cslb:
                 enrichment = {
                     "contact_phone":  cslb.get("phone", ""),
@@ -413,20 +500,18 @@ class PermitsAgent(BaseAgent):
 
     def fetch_leads(self) -> list:
         all_leads = []
+
         for source in PERMIT_SOURCES:
             city         = source["city"]
             skip_on_fail = source.get("_skip_if_no_data", False)
+            engine       = source.get("engine", "socrata")
+
             try:
-                resp = requests.get(
-                    source["url"],
-                    params=source["params"],
-                    timeout=15,
-                    headers={"Accept": "application/json"},
-                )
-                resp.raise_for_status()
-                records = resp.json()
-                if not isinstance(records, list):
-                    continue
+                if engine == "ckan_json":
+                    records = _fetch_ckan_json(source)
+                else:
+                    records = _fetch_socrata(source)
+
                 city_n = 0
                 for raw in records:
                     lead = _normalize_permit(raw, source["field_map"], city)
@@ -435,11 +520,13 @@ class PermitsAgent(BaseAgent):
                         all_leads.append(lead)
                         city_n += 1
                 logger.info(f"[{city}] {len(records)} registros → {city_n} leads relevantes")
+
             except Exception as e:
                 if skip_on_fail:
-                    logger.debug(f"[{city}] API no disponible, omitido: {e}")
+                    logger.debug(f"[{city}] Omitido: {e}")
                 else:
                     logger.error(f"[{city}] Error: {e}")
+
         return all_leads
 
     def notify(self, lead: dict):
