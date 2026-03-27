@@ -1,6 +1,6 @@
 # 🤖 Insul Lead Agents
 
-Sistema automatizado de detección de leads para **Insul-Techs, Inc.**
+Sistema automatizado de detección de leads para **Insulation**
 Monitorea fuentes de datos públicas del **Bay Area completo** y envía alertas
 directamente a Telegram en tiempo real — incluyendo los datos de contacto del GC.
 
@@ -177,7 +177,7 @@ pm2 save && pm2 startup
 
 ```ini
 [Unit]
-Description=Insul-Techs Lead Agents
+Description=Insul-lations Lead Agents
 After=network.target
 
 [Service]
