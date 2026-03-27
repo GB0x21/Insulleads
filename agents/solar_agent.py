@@ -1,3 +1,5 @@
+import os
+import re
 """
 agents/solar_agent.py  v4
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -126,7 +128,11 @@ class SolarAgent(BaseAgent):
                         lead["contact_phone"]  = match.get("phone", "")
                         lead["contact_email"]  = match.get("email", "")
                         lead["contact_source"] = f"CSV ({match['source']})"
-                    leads.append(lead)
+                    
+                    val = float(re.sub(r"[^\d.]", "", str(lead.get("value","") or "0")) or "0")
+                    lead["value_float"] = val
+                    if val >= float(os.getenv("MIN_PERMIT_VALUE","50000")):
+                        leads.append(lead)
 
                 logger.info(f"[Solar/{src['city']}] {len(records)} permisos solares")
             except Exception as e:
