@@ -1,27 +1,27 @@
 """
-agents/permits_agent.py  v7
+agents/permits_agent.py  v8
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FIXES v7 — Datos de contacto faltantes en SF:
+ROOT CAUSE ANALYSIS v8:
 
-  ✅ SF contractor vacío:
-     DataSF frecuentemente deja contractor_company_name vacío.
-     Ahora usamos campos alternativos en cascada:
-       1. contractor_company_name
-       2. contact_1_last_name + contact_1_first_name
-       3. Lookup CSLB con contact_1_license_number
+  ❌ SF 400 Bad Request — DOS causas en $select:
+     1. 'street_sfx' NO existe → campo real es 'street_suffix'
+     2. 'contact_1_*' NO existen en i98e-djp9 → son un dataset separado
+     FIX: Eliminar $select completamente (evitar el problema de raíz)
+           Dejar que la API devuelva todos los campos.
+           Mapear 'street_suffix' correctamente en field_map.
 
-  ✅ Dirección SF incompleta:
-     Agregado street_sfx (sufijo: Ave, St, Blvd, etc.)
-     y street_number_suffix (ej: "1/2")
+  ❌ SJ tarda exactamente 45s (= SOURCE_TIMEOUT) → el endpoint
+     ckan_search tarda en responder con 200 registros sin filtro de fecha.
+     FIX: Usar el endpoint SQL (datastore_search_sql) con WHERE en ISSUEDATE
+          para filtrar server-side y recibir solo registros del período.
+          Timeout separado de 30s para SJ (más agresivo).
 
-  ✅ Enriquecimiento con license vacío y contractor vacío:
-     Antes retornaba {} si ambos eran "".
-     Ahora intenta CSLB con cualquier dato disponible.
-
-  ✅ $select explícito en SF:
-     Pedimos solo los campos que necesitamos para que la respuesta
-     sea más ligera y rápida.
+  ❌ Datos de contacto SF ausentes:
+     contractor_company_name existe pero frecuentemente vacío.
+     Los datos reales de contacto están en dataset separado (kvek-u79k).
+     FIX: Para GCs sin datos, enriquecer via CSLB usando el owner name
+          como último recurso si no hay contractor.
 """
 
 import os
@@ -45,7 +45,7 @@ PERMIT_MONTHS    = int(os.getenv("PERMIT_MONTHS", "3"))
 SOURCE_TIMEOUT   = int(os.getenv("SOURCE_TIMEOUT", "45"))
 
 
-def _cutoff_date() -> str:
+def _cutoff_iso() -> str:
     return (datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS)).strftime("%Y-%m-%dT00:00:00")
 
 def _cutoff_ymd() -> str:
@@ -62,13 +62,16 @@ def _parse_value(v) -> float:
 
 
 def _build_sources() -> list:
-    cutoff     = _cutoff_date()
+    cutoff_iso = _cutoff_iso()
     cutoff_ymd = _cutoff_ymd()
 
     return [
+
         # ── San Francisco ─────────────────────────────────────────
-        # ✅ FIX: $select explícito con TODOS los campos de contacto
-        #    incluyendo contact_1_* como fallback cuando contractor_company_name está vacío
+        # ✅ FIX: Sin $select — evita el 400 por campos inválidos.
+        #    Solo usamos $where y $order que son campos válidos confirmados.
+        #    Campos reales del dataset: street_suffix (no street_sfx),
+        #    contractor_company_name, contractor_license (cuando existen).
         {
             "city": "San Francisco", "engine": "socrata",
             "url":  "https://data.sfgov.org/resource/i98e-djp9.json",
@@ -78,7 +81,7 @@ def _build_sources() -> list:
                 "$order": "issued_date DESC",
                 "$where": (
                     f"status IN('issued','complete') "
-                    f"AND issued_date >= '{cutoff}' "
+                    f"AND issued_date >= '{cutoff_iso}' "
                     f"AND permit_type_definition IN("
                     f"'additions alterations or repairs',"
                     f"'new construction wood frame',"
@@ -86,50 +89,45 @@ def _build_sources() -> list:
                     f"'accessory dwelling units',"
                     f"'new construction - wood frame')"
                 ),
-                # Pedimos solo los campos que usamos
-                "$select": (
-                    "permit_number,permit_type_definition,description,status,"
-                    "street_number,street_number_suffix,street_name,street_sfx,"
-                    "filed_date,issued_date,estimated_cost,"
-                    "contractor_company_name,contractor_license,"
-                    "contact_1_type,contact_1_last_name,contact_1_first_name,"
-                    "contact_1_license_number,"
-                    "owner"
-                ),
+                # ✅ SIN $select — la API devuelve todos los campos disponibles
             },
             "field_map": {
-                "id":           "permit_number",
-                "address":      "street_number",
-                "address_sfx":  "street_number_suffix",   # ej: "1/2"
-                "address2":     "street_name",
-                "address_type": "street_sfx",             # Ave, St, Blvd...
-                "permit_type":  "permit_type_definition",
-                "description":  "description",
-                "status":       "status",
-                "filed_date":   "filed_date",
-                "issued_date":  "issued_date",
-                # Campos de contratista — en cascada (ver _build_contractor)
-                "contractor":   "contractor_company_name",
-                "lic_number":   "contractor_license",
-                "c1_first":     "contact_1_first_name",
-                "c1_last":      "contact_1_last_name",
-                "c1_lic":       "contact_1_license_number",
-                "c1_type":      "contact_1_type",
-                "owner":        "owner",
-                "value":        "estimated_cost",
-                "url_tpl":      "https://sfdbi.org/permit/{permit_number}",
+                "id":          "permit_number",
+                "address":     "street_number",
+                "address_sfx": "street_number_suffix",  # ej: "1/2"
+                "address2":    "street_name",
+                "address_type":"street_suffix",          # ✅ FIX: "street_suffix" no "street_sfx"
+                "permit_type": "permit_type_definition",
+                "description": "description",
+                "status":      "status",
+                "filed_date":  "filed_date",
+                "issued_date": "issued_date",
+                "contractor":  "contractor_company_name",
+                "lic_number":  "contractor_license",     # campo real en el dataset
+                "owner":       "owner",
+                "value":       "estimated_cost",
+                "url_tpl":     "https://sfdbi.org/permit/{permit_number}",
+                # ✅ Eliminados contact_1_* que no existen en i98e-djp9
             },
         },
 
-        # ── San Jose — CKAN datastore_search ─────────────────────
+        # ── San Jose — SQL server-side con filtro de fecha ────────
+        # ✅ FIX: Usar datastore_search_sql con WHERE en ISSUEDATE
+        #    para filtrar en el servidor y evitar descargar 1500+ registros.
+        #    Timeout reducido a 30s (más agresivo que el global).
         {
-            "city": "San Jose", "engine": "ckan_search",
-            "url":  "https://data.sanjoseca.gov/api/3/action/datastore_search",
-            "timeout": SOURCE_TIMEOUT,
+            "city": "San Jose", "engine": "ckan_sql",
+            "url":  "https://data.sanjoseca.gov/api/3/action/datastore_search_sql",
+            "timeout": 30,
             "params": {
-                "resource_id": "761b7ae8-3be1-4ad6-923d-c7af6404a904",
-                "limit":       200,
-                "sort":        "ISSUEDATE desc",
+                "sql": (
+                    f'SELECT "FOLDERNUMBER","gx_location","FOLDERNAME","WORKDESCRIPTION",'
+                    f'"Status","ISSUEDATE","CONTRACTOR","OWNERNAME","PERMITVALUATION" '
+                    f'FROM "761b7ae8-3be1-4ad6-923d-c7af6404a904" '
+                    f'WHERE "ISSUEDATE" >= \'{cutoff_ymd}\' '
+                    f'ORDER BY "ISSUEDATE" DESC '
+                    f'LIMIT 200'
+                )
             },
             "field_map": {
                 "id":          "FOLDERNUMBER",
@@ -146,8 +144,6 @@ def _build_sources() -> list:
                 "value":       "PERMITVALUATION",
                 "url_tpl":     "https://www.sjpermits.org/",
             },
-            "_date_cutoff": cutoff_ymd,
-            "_date_field":  "ISSUEDATE",
         },
 
         # ── Sunnyvale ─────────────────────────────────────────────
@@ -157,7 +153,7 @@ def _build_sources() -> list:
             "timeout": SOURCE_TIMEOUT,
             "params": {
                 "$limit": 200, "$order": "issued_date DESC",
-                "$where": f"permit_status='Issued' AND issued_date >= '{cutoff}'",
+                "$where": f"permit_status='Issued' AND issued_date >= '{cutoff_iso}'",
             },
             "field_map": {
                 "id":"permit_number","address":"address","address2":None,
@@ -176,7 +172,7 @@ def _build_sources() -> list:
             "timeout": SOURCE_TIMEOUT,
             "params": {
                 "$limit": 200, "$order": "issue_date DESC",
-                "$where": f"status='Issued' AND issue_date >= '{cutoff}'",
+                "$where": f"status='Issued' AND issue_date >= '{cutoff_iso}'",
             },
             "field_map": {
                 "id":"permit_number","address":"address","address2":None,
@@ -195,7 +191,7 @@ def _build_sources() -> list:
             "timeout": SOURCE_TIMEOUT,
             "params": {
                 "$limit": 200, "$order": "date_issued DESC",
-                "$where": f"status='ISSUED' AND date_issued >= '{cutoff}'",
+                "$where": f"status='ISSUED' AND date_issued >= '{cutoff_iso}'",
             },
             "field_map": {
                 "id":"permit_number","address":"site_address","address2":None,
@@ -242,7 +238,7 @@ def _build_sources() -> list:
         {
             "city": "Oakland", "engine": "socrata", "_skip_if_no_data": True,
             "url": "https://data.oaklandca.gov/resource/p8h7-gzqg.json",
-            "timeout": 10, "params": {"$limit":1},
+            "timeout": 10, "params": {"$limit": 1},
             "field_map": {
                 "id":"permit_number","address":"site_address","address2":None,
                 "permit_type":"permit_type","description":"description","status":"status",
@@ -253,15 +249,15 @@ def _build_sources() -> list:
             },
         },
 
-        # ── Berkeley (requiere Socrata token) ─────────────────────
+        # ── Berkeley (requiere Socrata token en .env) ─────────────
         {
             "city": "Berkeley", "engine": "socrata",
             "_skip_if_no_data": True, "_requires_token": True,
             "url": "https://data.cityofberkeley.info/resource/cqze-unm8.json",
             "timeout": SOURCE_TIMEOUT,
             "params": {
-                "$limit":200,"$order":"date_issued DESC",
-                "$where": f"permit_status IN('ISSUED','FINALED') AND date_issued >= '{cutoff}'",
+                "$limit": 200, "$order": "date_issued DESC",
+                "$where": f"permit_status IN('ISSUED','FINALED') AND date_issued >= '{cutoff_iso}'",
             },
             "field_map": {
                 "id":"permit_number","address":"location_address","address2":None,
@@ -308,7 +304,8 @@ def _cslb_lookup(license_number: str = None, company_name: str = None) -> dict:
         r2 = s.post(_CSLB_URL, data=payload, timeout=10)
         r2.raise_for_status()
         soup2 = BeautifulSoup(r2.text, "html.parser")
-        table = soup2.find("table",{"id":re.compile(r"Grid|Results|License",re.I)}) or soup2.find("table")
+        table = (soup2.find("table", {"id": re.compile(r"Grid|Results|License", re.I)})
+                 or soup2.find("table"))
         if table:
             for row in table.find_all("tr")[1:2]:
                 cells = [td.get_text(strip=True) for td in row.find_all("td")]
@@ -325,6 +322,7 @@ def _cslb_lookup(license_number: str = None, company_name: str = None) -> dict:
 
 
 # ── Parsers ────────────────────────────────────────────────────────
+
 def _fetch_socrata(source: dict) -> list:
     headers = {"Accept": "application/json"}
     token = os.getenv("SOCRATA_APP_TOKEN", "")
@@ -337,27 +335,33 @@ def _fetch_socrata(source: dict) -> list:
     return data if isinstance(data, list) else []
 
 
-def _fetch_ckan_search(source: dict) -> list:
-    resp = requests.get(source["url"], params=source["params"],
-                        timeout=source.get("timeout", 30),
-                        headers={"Accept": "application/json"})
+def _fetch_ckan_sql(source: dict) -> list:
+    """
+    CKAN datastore_search_sql — filtra server-side con WHERE.
+    Mucho más rápido que el dump o ckan_search sin filtro.
+    """
+    resp = requests.get(
+        source["url"],
+        params=source["params"],
+        timeout=source.get("timeout", 30),
+        headers={"Accept": "application/json"},
+    )
     resp.raise_for_status()
     data = resp.json()
     if not data.get("success"):
-        raise ValueError(f"CKAN error: {data.get('error','unknown')}")
-    records   = data.get("result", {}).get("records", [])
-    cutoff    = source.get("_date_cutoff", "")
-    datefield = source.get("_date_field", "")
-    if cutoff and datefield:
-        return [r for r in records if (r.get(datefield) or "")[:10] >= cutoff]
-    return records
+        err = data.get("error", {})
+        raise ValueError(f"CKAN SQL error: {err}")
+    return data.get("result", {}).get("records", [])
 
 
 def _fetch_source(source: dict) -> tuple:
     city = source["city"]
     try:
         engine = source.get("engine", "socrata")
-        records = _fetch_ckan_search(source) if engine == "ckan_search" else _fetch_socrata(source)
+        if engine == "ckan_sql":
+            records = _fetch_ckan_sql(source)
+        else:
+            records = _fetch_socrata(source)
         return (city, records, None)
     except Exception as e:
         return (city, [], e)
@@ -365,61 +369,30 @@ def _fetch_source(source: dict) -> tuple:
 
 # ── Normalización ──────────────────────────────────────────────────
 
-def _build_contractor(raw: dict, field_map: dict) -> tuple[str, str]:
-    """
-    Construye (contractor_name, license_number) en cascada para SF.
-    Otros datasets usan el campo directo sin esta lógica.
-
-    Cascada de nombre:
-      1. contractor_company_name  (empresa registrada)
-      2. contact_1_last_name + contact_1_first_name (persona física)
-
-    Cascada de licencia:
-      1. contractor_license
-      2. contact_1_license_number
-    """
-    get = lambda k: raw.get(field_map.get(k, "") or "", "") or ""
-
-    name = get("contractor").strip()
-    if not name:
-        last  = get("c1_last").strip()
-        first = get("c1_first").strip()
-        if last or first:
-            name = f"{last}, {first}".strip(", ")
-
-    lic = get("lic_number").strip()
-    if not lic:
-        lic = get("c1_lic").strip()
-
-    return name, lic
-
-
 def _normalize_permit(raw: dict, field_map: dict, city: str) -> dict:
+    """
+    Construye el lead normalizado.
+    Para SF construye dirección completa con street_suffix.
+    """
     get = lambda k: raw.get(field_map.get(k, "") or "", "") or ""
 
-    # Dirección — SF tiene hasta 4 partes
-    parts = [get("address")]
+    # Dirección
+    parts = [get("address").strip()]
     if field_map.get("address_sfx"):
-        sfx = get("address_sfx").strip()
+        sfx = raw.get(field_map.get("address_sfx","") or "", "")
         if sfx:
-            parts.append(sfx)
-    if field_map.get("address2") and raw.get(field_map["address2"]):
-        parts.append(raw[field_map["address2"]])
+            parts.append(str(sfx).strip())
+    if field_map.get("address2") and raw.get(field_map.get("address2") or ""):
+        parts.append(raw[field_map["address2"]].strip())
     if field_map.get("address_type"):
-        atype = get("address_type").strip()
+        atype = raw.get(field_map.get("address_type","") or "", "")
         if atype:
-            parts.append(atype)
+            parts.append(str(atype).strip())
     address = " ".join(p for p in parts if p).strip()
 
-    # Contractor en cascada (SF) vs campo directo (otras ciudades)
-    if field_map.get("c1_last") or field_map.get("c1_lic"):
-        contractor, lic_number = _build_contractor(raw, field_map)
-    else:
-        contractor = get("contractor").strip()
-        lic_number = get("lic_number").strip()
-
     permit_id = get("id")
-    raw_vals  = {v: raw.get(v, "") for k, v in field_map.items() if v and k != "url_tpl"}
+    raw_vals  = {v: raw.get(v, "") for k, v in field_map.items()
+                 if v and k != "url_tpl" and not k.startswith("address")}
     try:
         permit_url = field_map.get("url_tpl", "").format(**raw_vals)
     except KeyError:
@@ -434,9 +407,9 @@ def _normalize_permit(raw: dict, field_map: dict, city: str) -> dict:
         "status":      get("status"),
         "filed_date":  get("filed_date")[:10] if get("filed_date") else "",
         "issued_date": get("issued_date")[:10] if get("issued_date") else "",
-        "contractor":  contractor,
-        "lic_number":  lic_number,
-        "owner":       get("owner"),
+        "contractor":  get("contractor").strip(),
+        "lic_number":  get("lic_number").strip(),
+        "owner":       get("owner").strip(),
         "value":       get("value"),
         "value_float": _parse_value(get("value")),
         "permit_url":  permit_url,
@@ -475,30 +448,29 @@ class PermitsAgent(BaseAgent):
 
     def _enrich_gc(self, lead: dict) -> dict:
         """
-        Enriquece datos de contacto del GC en 3 pasos:
-          1. Busca en CSVs locales por nombre (fuzzy)
-          2. Si no hay match → CSLB por número de licencia
-          3. Si no hay licencia → CSLB por nombre de empresa
-        
-        ✅ FIX: ya no retorna {} si ambos están vacíos — 
-           intenta CSLB con lo que haya disponible.
+        Enriquece datos de contacto del GC:
+          1. CSV local por nombre (fuzzy match)
+          2. CSLB por número de licencia
+          3. CSLB por nombre de empresa
+          4. Si contractor vacío pero hay owner → intenta con owner
         """
-        contractor = (lead.get("contractor") or "").strip()
-        lic        = (lead.get("lic_number")  or "").strip()
+        contractor = lead.get("contractor", "").strip()
+        lic        = lead.get("lic_number", "").strip()
+        owner      = lead.get("owner", "").strip()
 
-        # Clave de cache: preferir licencia (más precisa), luego nombre
-        cache_key = lic or contractor
+        # Para SF, si no hay GC pero hay owner, usamos owner como contacto
+        search_name = contractor or owner
+        cache_key   = lic or search_name
         if not cache_key:
-            return {}   # sin datos = nada que buscar
-
+            return {}
         if cache_key in self._cslb_cache:
             return self._cslb_cache[cache_key]
 
         enrichment = {}
 
-        # ── Paso 1: CSV local por nombre ──────────────────────────
-        if contractor:
-            match = lookup_contact(contractor, self._contacts)
+        # ── Paso 1: CSV local ─────────────────────────────────────
+        if search_name:
+            match = lookup_contact(search_name, self._contacts)
             if match:
                 enrichment = {
                     "contact_phone":  match.get("phone", ""),
@@ -506,26 +478,25 @@ class PermitsAgent(BaseAgent):
                     "contact_source": f"CSV ({match['source']})",
                     "contact_name":   match["raw_name"],
                 }
-                logger.debug(f"CSV match: {contractor} → {match['raw_name']}")
 
-        # ── Paso 2: CSLB por licencia (si no hay phone del CSV) ───
-        if not enrichment.get("contact_phone") and not enrichment.get("contact_email"):
+        # ── Paso 2: CSLB si no hay teléfono/email del CSV ─────────
+        has_contact = enrichment.get("contact_phone") or enrichment.get("contact_email")
+        if not has_contact:
             time.sleep(0.3)
-            # Primero intentar con licencia (más exacto), luego con nombre
             cslb = {}
             if lic:
                 cslb = _cslb_lookup(license_number=lic)
-                logger.debug(f"CSLB lic {lic} → {cslb}")
             if not cslb.get("phone") and contractor:
                 cslb = _cslb_lookup(company_name=contractor)
-                logger.debug(f"CSLB name '{contractor}' → {cslb}")
+            if not cslb.get("phone") and owner and owner != contractor:
+                cslb = _cslb_lookup(company_name=owner)
 
             if cslb:
                 enrichment = {
                     "contact_phone":  cslb.get("phone", ""),
                     "contact_email":  "",
                     "contact_source": "CSLB",
-                    "contact_name":   cslb.get("cslb_name", contractor),
+                    "contact_name":   cslb.get("cslb_name", search_name),
                     "cslb_city":      cslb.get("cslb_city", ""),
                     "cslb_status":    cslb.get("cslb_status", ""),
                 }
@@ -581,7 +552,7 @@ class PermitsAgent(BaseAgent):
             "📝 Descripción":      (lead.get("description") or "—")[:200],
             "📅 Fecha Emisión":    lead.get("issued_date"),
             "💰 Valor Estimado":   f"${value:,.0f}" if value else "—",
-            "👷 Contratista (GC)": lead.get("contractor") or "No especificado",
+            "👷 Contratista (GC)": lead.get("contractor") or "—",
             "🪪 Licencia CSLB":    lead.get("lic_number") or "—",
             "📞 Teléfono GC":      f"{phone}  _(via {source})_" if source and phone != "—" else phone,
             "✉️  Email GC":        email,
