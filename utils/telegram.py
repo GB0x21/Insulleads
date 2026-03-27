@@ -1,11 +1,9 @@
 """
-utils/telegram.py  v5
+utils/telegram.py  v7
 ━━━━━━━━━━━━━━━━━━━
-Rate limiter + retry 429 + digest mejorado.
+Rate limiter + retry 429 + digest completo con descripción.
 
-FIXES v5:
-  ✅ Digest rediseñado: cada lead en bloque separado, claro y escaneable
-  ✅ Mantiene rate limiter y retry automático de v4
+FIX v7: Digest ahora incluye descripción del proyecto.
 """
 
 import os
@@ -32,13 +30,11 @@ def _token() -> str:
         raise EnvironmentError("TELEGRAM_BOT_TOKEN no configurado")
     return t
 
-
 def _chat_id() -> str:
     c = os.getenv("TELEGRAM_CHAT_ID", "")
     if not c:
         raise EnvironmentError("TELEGRAM_CHAT_ID no configurado")
     return c
-
 
 def _wait_for_slot():
     global _last_send_time
@@ -48,6 +44,11 @@ def _wait_for_slot():
         if wait > 0:
             time.sleep(wait)
         _last_send_time = time.monotonic()
+
+def _esc(text: str) -> str:
+    for ch in ["_", "*", "`", "["]:
+        text = str(text).replace(ch, f"\\{ch}")
+    return text
 
 
 def send_message(text: str, max_retries: int = 4) -> bool:
@@ -85,6 +86,7 @@ def send_message(text: str, max_retries: int = 4) -> bool:
 
 
 def send_lead(agent_name, emoji, title, fields, url=None, cta=None) -> bool:
+    """Mensaje individual para un lead."""
     lines = []
     label = agent_name.upper().replace(emoji, "").strip()
     lines.append(f"{emoji} *{label}*")
@@ -94,7 +96,7 @@ def send_lead(agent_name, emoji, title, fields, url=None, cta=None) -> bool:
     for lbl, val in fields.items():
         if val and str(val).strip() not in ("—", "-", ""):
             lines.append(f"▸ *{lbl}:* {_esc(str(val))}")
-    if url:
+    if url and "http" in str(url):
         lines.append(f"▸ *🔗 Ver permiso:* {url}")
     if cta:
         lines.append(f"\n💡 _{_esc(cta)}_")
@@ -104,71 +106,82 @@ def send_lead(agent_name, emoji, title, fields, url=None, cta=None) -> bool:
 
 def send_digest(agent_name: str, emoji: str, leads: list) -> bool:
     """
-    Digest v5 — bloques separados, fáciles de escanear.
-    Si hay muchos leads se parte en páginas de 20.
+    Digest v7 — cada lead en bloque separado con TODOS los datos relevantes:
+    dirección completa, descripción del trabajo, contratista, teléfono,
+    email, valor y enlace. Páginas de 15 leads.
     """
     total      = len(leads)
-    page_size  = 20
-    pages      = [leads[i:i+page_size] for i in range(0, min(total, 100), page_size)]
+    page_size  = 15
+    pages      = [leads[i:i+page_size] for i in range(0, min(total, 120), page_size)]
     label      = agent_name.upper().replace(emoji, "").strip()
     timestamp  = datetime.now().strftime("%d/%m/%Y %H:%M")
     ok         = True
 
     for p_idx, page in enumerate(pages):
-        page_label = f"página {p_idx+1}/{len(pages)}" if len(pages) > 1 else ""
+        n_pages    = len(pages)
+        page_label = f" • página {p_idx+1}/{n_pages}" if n_pages > 1 else ""
         lines = [
             f"{emoji} *{label}*",
             f"━━━━━━━━━━━━━━━━━━━━",
-            f"📦 *{total} leads nuevos* {page_label}  •  🕐 {timestamp}",
+            f"📦 *{total} leads nuevos*{page_label}  •  🕐 {timestamp}",
             "",
         ]
 
         for i, lead in enumerate(page, start=p_idx * page_size + 1):
-            city       = _esc(lead.get("city", ""))
-            addr       = _esc(lead.get("address", "—"))
-            contractor = lead.get("contractor") or lead.get("contact_name") or ""
-            phone      = lead.get("contact_phone") or ""
-            email      = lead.get("contact_email") or ""
-            permit_type= lead.get("permit_type") or ""
-            issued     = lead.get("issued_date") or ""
-            value      = lead.get("value_float") or 0
-            url        = lead.get("permit_url") or ""
+            city        = lead.get("city", "")
+            addr        = lead.get("address", "—")
+            desc        = (lead.get("description") or "").strip()[:120]
+            permit_type = lead.get("permit_type") or ""
+            issued      = lead.get("issued_date") or ""
+            value       = lead.get("value_float") or _parse_value(lead.get("value",""))
+            contractor  = lead.get("contractor") or lead.get("contact_name") or ""
+            phone       = lead.get("contact_phone") or ""
+            email       = lead.get("contact_email") or ""
+            lic         = lead.get("lic_number") or ""
+            url         = lead.get("permit_url") or ""
+            contact_src = lead.get("contact_source") or ""
 
-            # Encabezado del lead
-            lines.append(f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬")
-            lines.append(f"*#{i} — {city}*")
-            lines.append(f"📍 {addr}")
+            lines.append("▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬")
+            lines.append(f"*#{i} — {_esc(city)}*")
+            lines.append(f"📍 {_esc(addr)}")
 
-            # Tipo y fecha
-            if permit_type:
+            if desc:
+                lines.append(f"📝 {_esc(desc)}")
+            elif permit_type:
                 lines.append(f"🔖 {_esc(permit_type)}")
+
             if issued:
                 lines.append(f"📅 Emitido: {issued}")
 
-            # Valor
             if value and value > 0:
                 lines.append(f"💰 *${value:,.0f}*")
 
-            # Contacto GC
+            # Bloque contacto GC
             if contractor:
-                lines.append(f"👷 {_esc(contractor)}")
+                lines.append(f"👷 *{_esc(contractor)}*")
+            if lic:
+                lines.append(f"🪪 Lic: {_esc(lic)}")
             if phone:
-                lines.append(f"📞 {_esc(phone)}")
+                src_tag = f" _({_esc(contact_src)})_" if contact_src else ""
+                lines.append(f"📞 {_esc(phone)}{src_tag}")
             if email:
                 lines.append(f"✉️  {_esc(email)}")
+            if not contractor and not phone and not email:
+                lines.append("📵 _Sin datos de contacto_")
 
-            # Enlace
             if url and "http" in url:
                 lines.append(f"🔗 {url}")
 
-            lines.append("")   # espacio entre leads
+            lines.append("")
 
         ok = send_message("\n".join(lines)) and ok
 
     return ok
 
 
-def _esc(text: str) -> str:
-    for ch in ["_", "*", "`", "["]:
-        text = str(text).replace(ch, f"\\{ch}")
-    return text
+def _parse_value(v) -> float:
+    import re
+    try:
+        return float(re.sub(r"[^\d.]", "", str(v) or "") or "0")
+    except Exception:
+        return 0.0
