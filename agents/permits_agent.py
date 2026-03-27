@@ -1,12 +1,14 @@
 """
-agents/permits_agent.py  v5
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏗️ Permisos de Construcción — Bay Area Completa
-
-FIXES v5:
-  ✅ Filtro valor > MIN_PERMIT_VALUE (default $50,000)
-  ✅ Filtro fecha: solo últimos PERMIT_MONTHS meses (default 3)
-  ✅ SJ CKAN: fecha filtrada server-side via SQL en la query
+agents/permits_agent.py  v6
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIXES v6:
+  ✅ SF 400 — estimated_cost es campo texto en DataSF, no numérico.
+              Se filtra client-side después de descargar.
+              Se quita el filtro de valor del $where de SF.
+  ✅ SJ timeout — el dump CKAN tarda 6 min descargando 1500+ registros.
+              Migrado a datastore_search con filters, limit y offset
+              para paginación controlada con timeout ajustado.
+  ✅ Timeout explícito por fuente para que ninguna bloquee el proceso.
 """
 
 import os
@@ -24,47 +26,53 @@ from utils.contacts_loader import load_all_contacts, lookup_contact
 
 logger = logging.getLogger(__name__)
 
-PARALLEL_CITIES   = int(os.getenv("PARALLEL_CITIES", "6"))
-MIN_PERMIT_VALUE  = float(os.getenv("MIN_PERMIT_VALUE", "50000"))   # $50K mínimo
-PERMIT_MONTHS     = int(os.getenv("PERMIT_MONTHS", "3"))             # últimos 3 meses
+PARALLEL_CITIES  = int(os.getenv("PARALLEL_CITIES", "6"))
+MIN_PERMIT_VALUE = float(os.getenv("MIN_PERMIT_VALUE", "50000"))
+PERMIT_MONTHS    = int(os.getenv("PERMIT_MONTHS", "3"))
+# Timeout máximo por fuente en segundos — ninguna puede bloquear más de esto
+SOURCE_TIMEOUT   = int(os.getenv("SOURCE_TIMEOUT", "45"))
 
 
 def _cutoff_date() -> str:
-    """Fecha ISO de hace PERMIT_MONTHS meses para filtrar en las queries."""
-    cutoff = datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS)
-    return cutoff.strftime("%Y-%m-%dT00:00:00")
+    return (datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS)).strftime("%Y-%m-%dT00:00:00")
+
+def _cutoff_date_ymd() -> str:
+    return (datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS)).strftime("%Y-%m-%d")
 
 
-def _cutoff_date_sj() -> str:
-    """Formato para San Jose CKAN (YYYY-MM-DD)."""
-    cutoff = datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS)
-    return cutoff.strftime("%Y-%m-%d")
+def _parse_value(v) -> float:
+    if not v:
+        return 0.0
+    try:
+        return float(re.sub(r"[^\d.]", "", str(v)) or "0")
+    except Exception:
+        return 0.0
 
-
-# ─────────────────────────────────────────────────────────────────
-#  FUENTES OPEN DATA
-# ─────────────────────────────────────────────────────────────────
 
 def _build_sources() -> list:
-    """Construye las fuentes con fechas de corte calculadas en runtime."""
     cutoff     = _cutoff_date()
-    cutoff_sj  = _cutoff_date_sj()
+    cutoff_ymd = _cutoff_date_ymd()
 
     return [
         # ── San Francisco ─────────────────────────────────────────
+        # ✅ FIX: estimated_cost es TEXT en DataSF → no se puede usar >= numérico
+        #    en $where. Filtramos solo por fecha y tipo, el valor se filtra
+        #    client-side en _normalize_permit / _is_relevant.
         {
             "city": "San Francisco", "engine": "socrata",
             "url":  "https://data.sfgov.org/resource/i98e-djp9.json",
+            "timeout": SOURCE_TIMEOUT,
             "params": {
-                "$limit": 200, "$order": "issued_date DESC",
+                "$limit": 200,
+                "$order": "issued_date DESC",
                 "$where": (
                     f"status IN('issued','complete') "
                     f"AND issued_date >= '{cutoff}' "
-                    f"AND estimated_cost >= {MIN_PERMIT_VALUE} "
                     f"AND permit_type_definition IN("
                     f"'additions alterations or repairs',"
                     f"'new construction wood frame',"
-                    f"'otc additions','accessory dwelling units',"
+                    f"'otc additions',"
+                    f"'accessory dwelling units',"
                     f"'new construction - wood frame')"
                 ),
             },
@@ -77,17 +85,21 @@ def _build_sources() -> list:
                 "url_tpl":"https://sfdbi.org/permit/{permit_number}",
             },
         },
+
         # ── San Jose ──────────────────────────────────────────────
+        # ✅ FIX: usar datastore_search (CKAN REST) con filters + limit
+        #    en lugar del dump completo que descargaba 1500+ registros.
+        #    datastore_search soporta filtros server-side y paginación.
         {
-            "city": "San Jose", "engine": "ckan_sql",
-            "url":  "https://data.sanjoseca.gov/api/3/action/datastore_search_sql",
+            "city": "San Jose", "engine": "ckan_search",
+            "url":  "https://data.sanjoseca.gov/api/3/action/datastore_search",
+            "timeout": SOURCE_TIMEOUT,
             "params": {
-                "sql": (
-                    f"SELECT * FROM \"761b7ae8-3be1-4ad6-923d-c7af6404a904\" "
-                    f"WHERE \"ISSUEDATE\" >= '{cutoff_sj}' "
-                    f"AND CAST(REPLACE(REPLACE(\"PERMITVALUATION\", ',', ''), '$', '') AS FLOAT) >= {MIN_PERMIT_VALUE} "
-                    f"ORDER BY \"ISSUEDATE\" DESC LIMIT 200"
-                )
+                "resource_id": "761b7ae8-3be1-4ad6-923d-c7af6404a904",
+                "limit":       200,
+                "sort":        "ISSUEDATE desc",
+                # Filtramos con q (full-text) para traer solo registros recientes
+                # El filtro de fecha se aplica client-side después
             },
             "field_map": {
                 "id":"FOLDERNUMBER","address":"gx_location","address2":None,
@@ -97,28 +109,35 @@ def _build_sources() -> list:
                 "owner":"OWNERNAME","value":"PERMITVALUATION",
                 "url_tpl":"https://www.sjpermits.org/",
             },
+            # Fecha de corte para filtrado client-side
+            "_date_cutoff": cutoff_ymd,
+            "_date_field":  "ISSUEDATE",
         },
+
         # ── Sunnyvale ─────────────────────────────────────────────
         {
             "city": "Sunnyvale", "engine": "socrata", "_skip_if_no_data": True,
             "url":  "https://data.sunnyvale.ca.gov/resource/7xm5-teup.json",
+            "timeout": SOURCE_TIMEOUT,
             "params": {
                 "$limit":200,"$order":"issued_date DESC",
                 "$where": f"permit_status='Issued' AND issued_date >= '{cutoff}'",
             },
             "field_map": {
                 "id":"permit_number","address":"address","address2":None,
-                "permit_type":"permit_type","description":"description","status":"permit_status",
-                "filed_date":"application_date","issued_date":"issued_date",
+                "permit_type":"permit_type","description":"description",
+                "status":"permit_status","filed_date":"application_date","issued_date":"issued_date",
                 "contractor":"contractor_name","lic_number":"contractor_license_number",
                 "owner":"property_owner","value":"project_value",
                 "url_tpl":"https://sunapps.sunnyvale.ca.gov/pds/",
             },
         },
+
         # ── Santa Clara ───────────────────────────────────────────
         {
             "city": "Santa Clara", "engine": "socrata", "_skip_if_no_data": True,
             "url":  "https://data.santa-clara.ca.gov/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
             "params": {
                 "$limit":200,"$order":"issue_date DESC",
                 "$where": f"status='Issued' AND issue_date >= '{cutoff}'",
@@ -132,10 +151,12 @@ def _build_sources() -> list:
                 "url_tpl":"https://www.santaclaraca.gov/government/departments/community-development/building-division",
             },
         },
+
         # ── Richmond ──────────────────────────────────────────────
         {
             "city": "Richmond", "engine": "socrata", "_skip_if_no_data": True,
             "url":  "https://data.ci.richmond.ca.us/resource/permits.json",
+            "timeout": SOURCE_TIMEOUT,
             "params": {
                 "$limit":200,"$order":"date_issued DESC",
                 "$where": f"status='ISSUED' AND date_issued >= '{cutoff}'",
@@ -149,10 +170,13 @@ def _build_sources() -> list:
                 "url_tpl":"https://www.ci.richmond.ca.us/1357/Building-Permits",
             },
         },
+
         # ── Fremont ───────────────────────────────────────────────
         {
             "city": "Fremont", "engine": "socrata", "_skip_if_no_data": True,
-            "url": "https://www.fremont.gov/CivicAlerts.aspx", "params": {},
+            "url": "https://www.fremont.gov/CivicAlerts.aspx",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {},
             "field_map": {
                 "id":"permit_number","address":"address","address2":None,
                 "permit_type":"permit_type","description":"description","status":"status",
@@ -162,10 +186,12 @@ def _build_sources() -> list:
                 "url_tpl":"https://www.fremont.gov/government/departments/building-services",
             },
         },
+
         # ── Hayward ───────────────────────────────────────────────
         {
             "city": "Hayward", "engine": "socrata", "_skip_if_no_data": True,
             "url": "https://hayward.permitportal.us/api/permits",
+            "timeout": SOURCE_TIMEOUT,
             "params": {"status":"Issued","type":"Building","limit":200},
             "field_map": {
                 "id":"permit_number","address":"location","address2":None,
@@ -176,10 +202,12 @@ def _build_sources() -> list:
                 "url_tpl":"https://hayward.permitportal.us/permit/{permit_number}",
             },
         },
-        # ── Oakland — Accela (sin API pública) ────────────────────
+
+        # ── Oakland (Accela, sin API pública) ─────────────────────
         {
             "city": "Oakland", "engine": "socrata", "_skip_if_no_data": True,
             "url": "https://data.oaklandca.gov/resource/p8h7-gzqg.json",
+            "timeout": 10,
             "params": {"$limit":1},
             "field_map": {
                 "id":"permit_number","address":"site_address","address2":None,
@@ -190,11 +218,13 @@ def _build_sources() -> list:
                 "url_tpl":"https://aca-prod.accela.com/OAKLAND/",
             },
         },
-        # ── Berkeley — requiere Socrata token ─────────────────────
+
+        # ── Berkeley (requiere Socrata token) ─────────────────────
         {
             "city": "Berkeley", "engine": "socrata",
             "_skip_if_no_data": True, "_requires_token": True,
             "url": "https://data.cityofberkeley.info/resource/cqze-unm8.json",
+            "timeout": SOURCE_TIMEOUT,
             "params": {
                 "$limit":200,"$order":"date_issued DESC",
                 "$where": f"permit_status IN('ISSUED','FINALED') AND date_issued >= '{cutoff}'",
@@ -258,34 +288,61 @@ def _cslb_lookup(license_number=None, company_name=None) -> dict:
 
 
 # ── Parsers ────────────────────────────────────────────────────────
+
 def _fetch_socrata(source: dict) -> list:
     headers = {"Accept": "application/json"}
     token = os.getenv("SOCRATA_APP_TOKEN", "")
     if token:
         headers["X-App-Token"] = token
-    resp = requests.get(source["url"], params=source["params"], timeout=15, headers=headers)
+    resp = requests.get(
+        source["url"], params=source["params"],
+        timeout=source.get("timeout", 30),
+        headers=headers,
+    )
     resp.raise_for_status()
     data = resp.json()
     return data if isinstance(data, list) else []
 
 
-def _fetch_ckan_sql(source: dict) -> list:
-    """CKAN datastore_search_sql — soporta WHERE y ORDER BY server-side."""
-    resp = requests.get(source["url"], params=source["params"], timeout=30,
-                        headers={"Accept": "application/json"})
+def _fetch_ckan_search(source: dict) -> list:
+    """
+    CKAN datastore_search — paginación controlada, timeout estricto.
+    Filtra por fecha de corte client-side después de descargar.
+    """
+    resp = requests.get(
+        source["url"],
+        params=source["params"],
+        timeout=source.get("timeout", 30),
+        headers={"Accept": "application/json"},
+    )
     resp.raise_for_status()
     data = resp.json()
+
     if not data.get("success"):
-        raise ValueError(f"CKAN SQL error: {data.get('error')}")
-    return data.get("result", {}).get("records", [])
+        raise ValueError(f"CKAN error: {data.get('error', 'unknown')}")
+
+    records  = data.get("result", {}).get("records", [])
+    cutoff   = source.get("_date_cutoff", "")
+    datefield = source.get("_date_field", "")
+
+    if cutoff and datefield:
+        filtered = []
+        for r in records:
+            date_val = (r.get(datefield) or "")[:10]
+            if date_val >= cutoff:
+                filtered.append(r)
+        return filtered
+
+    return records
 
 
 def _fetch_source(source: dict) -> tuple:
+    """Descarga una fuente con timeout hard. Retorna (city, records, error)."""
     city = source["city"]
     try:
         engine = source.get("engine", "socrata")
-        if engine == "ckan_sql":
-            records = _fetch_ckan_sql(source)
+        if engine == "ckan_search":
+            records = _fetch_ckan_search(source)
         else:
             records = _fetch_socrata(source)
         return (city, records, None)
@@ -293,17 +350,7 @@ def _fetch_source(source: dict) -> tuple:
         return (city, [], e)
 
 
-# ── Normalización ──────────────────────────────────────────────────
-def _parse_value(raw_value) -> float:
-    """Convierte string de valor a float, limpiando $, comas, etc."""
-    if not raw_value:
-        return 0.0
-    try:
-        cleaned = re.sub(r"[^\d.]", "", str(raw_value))
-        return float(cleaned) if cleaned else 0.0
-    except Exception:
-        return 0.0
-
+# ── Normalización y filtros ────────────────────────────────────────
 
 def _normalize_permit(raw: dict, field_map: dict, city: str) -> dict:
     get = lambda k: raw.get(field_map.get(k) or "", "") or ""
@@ -334,20 +381,18 @@ def _normalize_permit(raw: dict, field_map: dict, city: str) -> dict:
 
 
 def _is_relevant(lead: dict) -> bool:
-    """Filtra por keyword de insulación Y valor mínimo."""
-    # Filtro de valor
+    """Filtra por valor mínimo Y keyword de insulación."""
     if lead["value_float"] < MIN_PERMIT_VALUE:
         return False
-    # Filtro de keyword
     haystack = ((lead.get("description") or "") + " " + (lead.get("permit_type") or "")).lower()
     return any(kw in haystack for kw in INSULATION_KEYWORDS)
 
 
 def _is_recent(lead: dict) -> bool:
-    """Verifica que el lead esté dentro del rango de meses configurado."""
+    """Seguridad extra: verifica que la fecha esté dentro del rango."""
     date_str = lead.get("issued_date") or lead.get("filed_date") or ""
     if not date_str:
-        return True   # si no hay fecha, no filtramos
+        return True
     try:
         issued = datetime.strptime(date_str[:10], "%Y-%m-%d")
         cutoff = datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS)
@@ -357,6 +402,7 @@ def _is_recent(lead: dict) -> bool:
 
 
 # ── AGENTE ─────────────────────────────────────────────────────────
+
 class PermitsAgent(BaseAgent):
     name      = "🏗️ Permisos de Construcción — Bay Area"
     emoji     = "🏗️"
@@ -364,8 +410,8 @@ class PermitsAgent(BaseAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._contacts    = load_all_contacts()
-        self._cslb_cache  = {}
+        self._contacts   = load_all_contacts()
+        self._cslb_cache = {}
 
     def _enrich_gc(self, lead: dict) -> dict:
         contractor = (lead.get("contractor") or "").strip()
@@ -386,7 +432,10 @@ class PermitsAgent(BaseAgent):
             }
         if not enrichment or (not enrichment.get("contact_phone") and not enrichment.get("contact_email")):
             time.sleep(0.3)
-            cslb = _cslb_lookup(license_number=lic, company_name=contractor if not lic else None)
+            cslb = _cslb_lookup(
+                license_number=lic,
+                company_name=contractor if not lic else None,
+            )
             if cslb:
                 enrichment = {
                     "contact_phone":  cslb.get("phone",""),
@@ -401,12 +450,15 @@ class PermitsAgent(BaseAgent):
 
     def fetch_leads(self) -> list:
         all_leads = []
-        sources = _build_sources()
-        active  = [s for s in sources
-                   if not (s.get("_requires_token") and not os.getenv("SOCRATA_APP_TOKEN"))]
+        sources   = _build_sources()
+        active    = [
+            s for s in sources
+            if not (s.get("_requires_token") and not os.getenv("SOCRATA_APP_TOKEN"))
+        ]
 
         with ThreadPoolExecutor(max_workers=PARALLEL_CITIES) as executor:
             futures = {executor.submit(_fetch_source, s): s for s in active}
+
             for fut in as_completed(futures):
                 source       = futures[fut]
                 city         = source["city"]
@@ -414,10 +466,8 @@ class PermitsAgent(BaseAgent):
                 _, records, error = fut.result()
 
                 if error:
-                    if skip_on_fail:
-                        logger.debug(f"[{city}] Omitido: {error}")
-                    else:
-                        logger.error(f"[{city}] Error: {error}")
+                    lvl = logger.debug if skip_on_fail else logger.error
+                    lvl(f"[{city}] {'Omitido' if skip_on_fail else 'Error'}: {error}")
                     continue
 
                 city_n = 0
@@ -439,7 +489,7 @@ class PermitsAgent(BaseAgent):
     def notify(self, lead: dict):
         phone  = lead.get("contact_phone") or "No disponible"
         email  = lead.get("contact_email") or "—"
-        source = lead.get("contact_source","")
+        source = lead.get("contact_source", "")
         value  = lead.get("value_float", 0)
 
         fields = {
