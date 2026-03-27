@@ -71,7 +71,7 @@ def run_agent(agent_key: str):
     t0 = time.monotonic()
     try:
         leads = agent.fetch_leads()
-        new   = sum(1 for lead in leads if agent.send_if_new(lead))
+        new   = agent.send_batch(leads)
         elapsed = time.monotonic() - t0
         logger.info(
             f"[{agent_key}] {len(leads)} leads encontrados, "

@@ -1,11 +1,11 @@
 """
-agents/solar_agent.py  v2
+agents/solar_agent.py  v4
 ━━━━━━━━━━━━━━━━━━━━━━━
 ☀️ Instalaciones Solares — Bay Area
-Fuentes: SF DataSF + San Jose CKAN
-Solar nuevo = necesitan mejorar aislamiento para maximizar ahorro energético
 
-✅ FIX v2: removido Oakland (dataset Socrata 404, migró a Accela)
+FIX v4: San Jose CKAN devolvía 1,367 registros porque el filtro solar
+         no se aplicaba al parsear. Ahora el filtro va DENTRO del parser
+         y se aplica antes de agregar el lead.
 """
 
 import logging
@@ -17,15 +17,15 @@ from utils.contacts_loader import load_all_contacts, lookup_contact
 
 logger = logging.getLogger(__name__)
 
+SOLAR_KW = ["SOLAR", "PHOTOVOLTAIC", "PV SYSTEM", "PANEL SOLAR"]
+
 SOLAR_SOURCES = [
-    # ── San Francisco — Socrata ───────────────────────────────────
     {
         "city":   "San Francisco",
         "engine": "socrata",
         "url":    "https://data.sfgov.org/resource/i98e-djp9.json",
         "params": {
-            "$limit": 30,
-            "$order": "filed_date DESC",
+            "$limit": 30, "$order": "filed_date DESC",
             "$where": (
                 "status IN('issued','complete') AND "
                 "(UPPER(description) LIKE '%SOLAR%' OR "
@@ -34,44 +34,40 @@ SOLAR_SOURCES = [
             ),
         },
         "field_map": {
-            "id":         "permit_number",
-            "address":    "street_number",
-            "address2":   "street_name",
-            "desc":       "description",
-            "status":     "status",
-            "date":       "filed_date",
-            "contractor": "contractor_company_name",
-            "lic":        "contractor_license",
-            "owner":      "owner",
-            "value":      "estimated_cost",
+            "id":"permit_number","address":"street_number","address2":"street_name",
+            "desc":"description","status":"status","date":"filed_date",
+            "contractor":"contractor_company_name","lic":"contractor_license",
+            "owner":"owner","value":"estimated_cost",
         },
     },
-    # ── San Jose — CKAN JSON ──────────────────────────────────────
     {
         "city":   "San Jose",
         "engine": "ckan_json",
+        # ✅ FIX: mismo endpoint pero ahora filtramos por keyword ANTES de agregar
         "url":    "https://data.sanjoseca.gov/datastore/dump/761b7ae8-3be1-4ad6-923d-c7af6404a904",
         "params": {"format": "json"},
-        "filter_fn": lambda r: any(kw in (r.get("WORKDESCRIPTION") or "").upper()
-                                   for kw in ["SOLAR", "PHOTOVOLTAIC", "PV"]),
         "field_map": {
-            "id":         "FOLDERNUMBER",
-            "address":    "gx_location",
-            "address2":   None,
-            "desc":       "WORKDESCRIPTION",
-            "status":     "Status",
-            "date":       "ISSUEDATE",
-            "contractor": "CONTRACTOR",
-            "lic":        None,
-            "owner":      "OWNERNAME",
-            "value":      "PERMITVALUATION",
+            "id":"FOLDERNUMBER","address":"gx_location","address2":None,
+            "desc":"WORKDESCRIPTION","status":"Status","date":"ISSUEDATE",
+            "contractor":"CONTRACTOR","lic":None,
+            "owner":"OWNERNAME","value":"PERMITVALUATION",
         },
     },
 ]
 
 
-def _fetch_records(source: dict) -> list[dict]:
-    """Descarga registros según el engine de la fuente."""
+def _is_solar(record: dict) -> bool:
+    """Revisa si el registro menciona solar en descripción o tipo de permiso."""
+    haystack = " ".join([
+        (record.get("WORKDESCRIPTION") or ""),
+        (record.get("FOLDERNAME")      or ""),
+        (record.get("description")     or ""),
+        (record.get("permit_type_definition") or ""),
+    ]).upper()
+    return any(kw in haystack for kw in SOLAR_KW)
+
+
+def _fetch_records(source: dict) -> list:
     resp = requests.get(source["url"], params=source["params"], timeout=30,
                         headers={"Accept": "application/json"})
     resp.raise_for_status()
@@ -79,17 +75,16 @@ def _fetch_records(source: dict) -> list[dict]:
 
     if source["engine"] == "ckan_json":
         fields = [f["id"] for f in data.get("fields", [])]
-        raw    = data.get("records", [])
         result = []
-        for row in raw:
+        for row in data.get("records", []):
             rec = dict(zip(fields, row)) if isinstance(row, list) else row
-            # Filtro solar inline si viene definido
-            if source.get("filter_fn") and not source["filter_fn"](rec):
-                continue
-            result.append(rec)
+            # ✅ FIX: filtro solar aplicado aquí, antes de agregar
+            if _is_solar(rec):
+                result.append(rec)
         return result
     else:
-        return data if isinstance(data, list) else []
+        records = data if isinstance(data, list) else []
+        return [r for r in records if _is_solar(r)]
 
 
 class SolarAgent(BaseAgent):
@@ -99,7 +94,7 @@ class SolarAgent(BaseAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._contacts = load_all_contacts()  # cache de módulo
+        self._contacts = load_all_contacts()
 
     def fetch_leads(self) -> list:
         leads = []
@@ -142,8 +137,7 @@ class SolarAgent(BaseAgent):
         phone  = lead.get("contact_phone") or "No disponible"
         source = lead.get("contact_source", "")
         send_lead(
-            agent_name=self.name,
-            emoji=self.emoji,
+            agent_name=self.name, emoji=self.emoji,
             title=f"{lead['city']} — {lead['address']}",
             fields={
                 "📍 Ciudad":           lead.get("city"),
