@@ -1,4 +1,4 @@
-# 🤖 Insul-Techs Lead Agents
+# 🤖 Insul Lead Agents
 
 Sistema automatizado de detección de leads para **Insul-Techs, Inc.**
 Monitorea fuentes de datos públicas del **Bay Area completo** y envía alertas
