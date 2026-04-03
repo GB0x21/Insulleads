@@ -50,7 +50,7 @@ class FloodAgent(BaseAgent):
                 resp = requests.get(
                     NOAA_BASE,
                     params={"zone": zone_info["zone"]},
-                    headers={"User-Agent": "InsulTechs-LeadBot/1.0 (contact@insultechs.com)"},
+                    headers={"User-Agent": "LeadBot/1.0 (contact@example.com)"},
                     timeout=15,
                 )
                 resp.raise_for_status()

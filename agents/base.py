@@ -13,7 +13,7 @@ Clase base para todos los agentes.
 import logging
 from abc import ABC, abstractmethod
 from utils.db import is_sent, mark_sent
-from utils.telegram import send_digest, send_message, MAX_BURST
+from utils.telegram import send_message
 from utils.dedup import get_dedup_engine
 from utils.hot_zones import get_hot_zone_detector, format_hot_zone_alert
 
@@ -77,29 +77,15 @@ class BaseAgent(ABC):
         for lead in new_leads:
             hz_detector.add_lead(lead)
 
-        # Paso 4: Enviar leads
-        if len(new_leads) <= MAX_BURST:
-            count = 0
-            for lead in new_leads:
-                try:
-                    self.notify(lead)
-                    mark_sent(self.agent_key, lead["id"])
-                    count += 1
-                except Exception as e:
-                    logger.error(f"[{self.agent_key}] Error notificando {lead.get('id')}: {e}")
-            sent_count = count
-        else:
-            logger.info(
-                f"[{self.agent_key}] {len(new_leads)} leads nuevos — "
-                f"modo DIGEST (>{MAX_BURST})"
-            )
-            ok = send_digest(self.name, self.emoji, new_leads)
-            if ok:
-                for lead in new_leads:
-                    mark_sent(self.agent_key, lead["id"])
-                sent_count = len(new_leads)
-            else:
-                sent_count = 0
+        # Paso 4: Enviar leads — siempre mensajes individuales
+        sent_count = 0
+        for lead in new_leads:
+            try:
+                self.notify(lead)
+                mark_sent(self.agent_key, lead["id"])
+                sent_count += 1
+            except Exception as e:
+                logger.error(f"[{self.agent_key}] Error notificando {lead.get('id')}: {e}")
 
         # Paso 5: Detectar y alertar hot zones nuevas
         new_zones = hz_detector.get_new_hot_zones()

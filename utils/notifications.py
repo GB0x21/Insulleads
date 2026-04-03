@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # ── Configuración ────────────────────────────────────────────────────
 SENDGRID_API_KEY     = os.getenv("SENDGRID_API_KEY", "")
-SENDGRID_FROM_EMAIL  = os.getenv("SENDGRID_FROM_EMAIL", "leads@insul-techs.com")
+SENDGRID_FROM_EMAIL  = os.getenv("SENDGRID_FROM_EMAIL", "leads@example.com")
 SENDGRID_TO_EMAIL    = os.getenv("SENDGRID_TO_EMAIL", "")
 
 TWILIO_ACCOUNT_SID   = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -61,7 +61,7 @@ def send_email(subject: str, html_body: str, to_email: str = None) -> bool:
             },
             json={
                 "personalizations": [{"to": [{"email": to}]}],
-                "from": {"email": SENDGRID_FROM_EMAIL, "name": "Insul-Techs Leads"},
+                "from": {"email": SENDGRID_FROM_EMAIL, "name": "Lead Generation Alerts"},
                 "subject": subject,
                 "content": [{"type": "text/html", "value": html_body}],
             },
@@ -108,7 +108,7 @@ def send_lead_email(lead: dict, scoring: dict = None) -> bool:
     html_body = f"""
     <div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto'>
         <div style='background:#1a73e8;color:white;padding:15px;border-radius:5px 5px 0 0'>
-            <h2 style='margin:0'>Insul-Techs — Nuevo Lead</h2>
+            <h2 style='margin:0'>Lead Generation Agents — Nuevo Lead</h2>
         </div>
         <div style='border:1px solid #ddd;padding:15px;border-radius:0 0 5px 5px'>
             {score_html}
@@ -259,7 +259,7 @@ def flush_digest() -> bool:
 
     html = f"""
     <div style='font-family:Arial,sans-serif'>
-        <h2>Insul-Techs — Digest de {count} leads</h2>
+        <h2>Lead Generation Agents — Digest de {count} leads</h2>
         <p>{datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
         <table style='width:100%;border-collapse:collapse'>
             <tr style='background:#1a73e8;color:white'>

@@ -630,7 +630,7 @@ INSULATION_KEYWORDS = [
 
 # ── CSLB fallback ──────────────────────────────────────────────────
 _CSLB_URL = "https://www2.cslb.ca.gov/OnlineServices/CheckLicenseII/CheckLicense.aspx"
-_CSLB_HDR = {"User-Agent": "Mozilla/5.0 (compatible; InsulTechs-LeadBot/1.0)"}
+_CSLB_HDR = {"User-Agent": "Mozilla/5.0 (compatible; LeadBot/1.0)"}
 
 def _cslb_lookup(license_number: str = None, company_name: str = None) -> dict:
     result = {}

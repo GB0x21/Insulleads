@@ -1,6 +1,6 @@
-# Insul-Techs Lead Agents
+# Lead Generation Agents
 
-Sistema automatizado de generacion de leads para **Insul-Techs, Inc.** — contratistas de insulacion en el Bay Area.
+Sistema automatizado de generacion de leads para contratistas de insulacion en el Bay Area.
 
 Monitorea **54 ciudades** en **9 condados** del Bay Area usando APIs publicas y de pago, detecta oportunidades de insulacion, y envia alertas en tiempo real a Telegram con datos de contacto del GC.
 
@@ -158,7 +158,7 @@ CENSUS_API_KEY=              # Demografia — gratis en api.census.gov/data/key_
 ATTOM_API_KEY=               # Datos de propiedad — $200/mes
 HUNTER_API_KEY=              # Email finder — $49/mes (100 gratis)
 SENDGRID_API_KEY=            # Email outreach — $15/mes
-SENDGRID_FROM_EMAIL=leads@insul-techs.com
+SENDGRID_FROM_EMAIL=leads@example.com
 SENDGRID_TO_EMAIL=tu@email.com
 GOOGLE_GEOCODE_API_KEY=      # Geocoding — ~$30/mes
 
@@ -225,7 +225,7 @@ sudo nano /etc/systemd/system/insulleads.service
 Pega este contenido:
 ```ini
 [Unit]
-Description=Insul-Techs Lead Generation Agents
+Description=Lead Generation Agents
 After=network.target
 
 [Service]
