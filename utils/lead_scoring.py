@@ -142,9 +142,34 @@ def score_lead(lead: dict) -> dict:
     # Zonas con casas más antiguas = más demanda de insulación
     city = (lead.get("city") or "").lower()
     _high_demand_cities = {
+        # Tier 1 — casas antiguas, alta densidad, alta demanda
         "san francisco": 10, "oakland": 9, "berkeley": 9,
         "richmond": 8, "san jose": 7, "hayward": 7,
+        "alameda": 8, "san leandro": 7, "emeryville": 8,
+        "albany": 7, "el cerrito": 7,
+        # Tier 2 — suburban, demanda media-alta
         "fremont": 6, "sunnyvale": 5, "santa clara": 5,
+        "concord": 7, "walnut creek": 6, "martinez": 7,
+        "pleasant hill": 6, "pittsburg": 7, "antioch": 7,
+        "vallejo": 8, "fairfield": 6, "napa": 6,
+        "san rafael": 6, "novato": 5, "petaluma": 5,
+        "daly city": 7, "south san francisco": 6,
+        "san mateo": 6, "burlingame": 5, "san bruno": 6,
+        # Tier 3 — newer suburbs, demanda media
+        "dublin": 4, "pleasanton": 4, "livermore": 5,
+        "san ramon": 4, "danville": 4, "lafayette": 4,
+        "orinda": 4, "moraga": 4, "union city": 5,
+        "newark": 5, "castro valley": 6, "san lorenzo": 6,
+        "millbrae": 5, "vacaville": 5, "benicia": 5,
+        "hercules": 6, "pinole": 6, "oakley": 5,
+        "brentwood": 4, "clayton": 4, "tracy": 4,
+        "stockton": 5, "sonoma": 4, "suisun city": 5,
+        "rio vista": 4, "alamo": 4, "redwood city": 5,
+        # County-level sources
+        "contra costa county": 7, "alameda county": 7,
+        "san mateo county": 6, "solano county": 6,
+        "marin county": 6, "napa county": 6,
+        "sonoma county": 5, "san joaquin county": 5,
     }
     geo_score = _high_demand_cities.get(city, 4)
     total += geo_score
@@ -152,9 +177,9 @@ def score_lead(lead: dict) -> dict:
     # ── 6. Tipo de fuente (0-10 pts) ─────────────────────────────
     agent_key = lead.get("_agent_key", "")
     _source_scores = {
-        "permits": 10, "realestate": 9, "solar": 8,
-        "energy": 7, "rodents": 6, "places": 5,
-        "yelp": 4, "flood": 5,
+        "permits": 10, "construction": 10, "deconstruction": 9,
+        "realestate": 9, "solar": 8, "energy": 7,
+        "rodents": 6, "places": 5, "yelp": 4, "flood": 5,
     }
     total += _source_scores.get(agent_key, 5)
 

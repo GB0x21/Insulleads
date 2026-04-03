@@ -401,6 +401,223 @@ def _build_sources() -> list:
                 "url_tpl":"https://www.walnut-creek.org/departments/community-development/building",
             },
         },
+
+        # ══════════════════════════════════════════════════════════
+        #  COUNTY-LEVEL PORTALS  (cover multiple cities each)
+        # ══════════════════════════════════════════════════════════
+
+        # ── Contra Costa County ───────────────────────────────────
+        # Covers: Pleasant Hill, Martinez, Clayton, Pittsburg, Lafayette,
+        #         Orinda, Antioch, Moraga, Alamo, Danville, Hercules,
+        #         Pinole, Oakley, San Ramon, Brentwood, El Cerrito
+        # (Walnut Creek, Concord, Richmond already have individual entries)
+        {
+            "city": "Contra Costa County (Pleasant Hill, Martinez, Clayton, Pittsburg, Lafayette, Orinda, Antioch, Moraga, Alamo, Danville, Hercules, Pinole, Oakley, San Ramon, Brentwood, El Cerrito)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.contracosta.gov/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.contracosta.ca.gov/4839/Building-Inspection",
+            },
+        },
+
+        # ── Alameda County ────────────────────────────────────────
+        # Covers: Dublin, Alameda, San Leandro, Pleasanton, Livermore,
+        #         Newark, Castro Valley, San Lorenzo, Emeryville, Albany, Union City
+        # (Oakland, Berkeley, Fremont, Hayward already have individual entries)
+        {
+            "city": "Alameda County (Dublin, San Leandro, Pleasanton, Livermore, Newark, Castro Valley, San Lorenzo, Emeryville, Albany, Union City)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.acgov.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.acgov.org/building/",
+            },
+        },
+
+        # ── Alameda (City) ────────────────────────────────────────
+        {
+            "city": "Alameda", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.alamedaca.gov/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.alamedaca.gov/Departments/Building",
+            },
+        },
+
+        # ── San Mateo County ──────────────────────────────────────
+        # Covers: South San Francisco, San Bruno, Millbrae, Burlingame
+        # (Daly City, San Mateo, Redwood City already have individual entries)
+        {
+            "city": "San Mateo County (South San Francisco, San Bruno, Millbrae, Burlingame)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.smcgov.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.smcgov.org/planning-building",
+            },
+        },
+
+        # ── Solano County ─────────────────────────────────────────
+        # Covers: Benicia, Fairfield, Suisun City, Rio Vista, Vacaville
+        # (Vallejo has its own individual entry below)
+        {
+            "city": "Solano County (Benicia, Fairfield, Suisun City, Rio Vista, Vacaville)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.solanocounty.com/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.solanocounty.com/depts/resource_mgmt/building/",
+            },
+        },
+
+        # ── Vallejo (City) ────────────────────────────────────────
+        {
+            "city": "Vallejo", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.cityofvallejo.net/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.cityofvallejo.net/city_hall/departments___divisions/building_division",
+            },
+        },
+
+        # ── Marin County ─────────────────────────────────────────
+        # Covers: Novato, San Rafael
+        {
+            "city": "Marin County (Novato, San Rafael)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.marincounty.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.marincounty.org/depts/cd/divisions/building-and-safety",
+            },
+        },
+
+        # ── Napa County ──────────────────────────────────────────
+        # Covers: Napa
+        {
+            "city": "Napa County (Napa)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.countyofnapa.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.countyofnapa.org/191/Building",
+            },
+        },
+
+        # ── Sonoma County ─────────────────────────────────────────
+        # Covers: Sonoma, Petaluma
+        {
+            "city": "Sonoma County (Sonoma, Petaluma)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.sonomacounty.ca.gov/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://sonomacounty.ca.gov/development-services/permit-sonoma",
+            },
+        },
+
+        # ── San Joaquin County ────────────────────────────────────
+        # Covers: Tracy, Stockton
+        {
+            "city": "San Joaquin County (Tracy, Stockton)",
+            "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.sjgov.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.sjgov.org/department/cd/building/",
+            },
+        },
     ]
 
 

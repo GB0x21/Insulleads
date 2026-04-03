@@ -95,6 +95,178 @@ ENERGY_SOURCES = [
         },
         "_is_permit": True,
     },
+    # ── Oakland Energy Benchmarking ─────────────────────────────
+    {
+        "city":    "Oakland",
+        "engine":  "socrata",
+        "url":     "https://data.oaklandca.gov/resource/energy-benchmarking.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "year DESC",
+            "$where": (
+                "energy_star_score IS NOT NULL "
+                "AND energy_star_score < 50"
+            ),
+        },
+        "field_map": {
+            "id":           "building_id",
+            "address":      "address",
+            "name":         "building_name",
+            "type":         "property_type",
+            "sqft":         "floor_area",
+            "year_built":   "year_built",
+            "energy_score": "energy_star_score",
+            "emissions":    "total_ghg_emissions",
+            "eui":          "site_eui",
+        },
+    },
+    # ── San Jose Energy Permits — CKAN ──────────────────────────
+    {
+        "city":    "San Jose",
+        "engine":  "socrata",
+        "url":     "https://data.sanjoseca.gov/resource/energy-benchmarking.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$where": (
+                "energy_star_score IS NOT NULL "
+                "AND energy_star_score < 50"
+            ),
+        },
+        "field_map": {
+            "id":           "building_id",
+            "address":      "address",
+            "name":         "building_name",
+            "type":         "property_type",
+            "sqft":         "floor_area",
+            "year_built":   "year_built",
+            "energy_score": "energy_star_score",
+            "emissions":    "total_ghg_emissions",
+            "eui":          "site_eui",
+        },
+    },
+    # ── Berkeley Energy Permits ─────────────────────────────────
+    {
+        "city":    "Berkeley",
+        "engine":  "socrata",
+        "url":     "https://data.cityofberkeley.info/resource/k92i-t48y.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 50,
+            "$order": "issue_date DESC",
+            "$where": (
+                "issue_date >= '{cutoff_iso}' "
+                "AND (UPPER(project_description) LIKE '%ENERGY AUDIT%' "
+                "OR UPPER(project_description) LIKE '%WEATHERIZATION%' "
+                "OR UPPER(project_description) LIKE '%TITLE 24%' "
+                "OR UPPER(project_description) LIKE '%ENERGY RETROFIT%')"
+            ),
+        },
+        "field_map": {
+            "id":        "record_number",
+            "address":   "address",
+            "name":      "project_description",
+            "type":      "record_type",
+            "year_built": None,
+            "energy_score": None,
+            "owner":     "owner",
+        },
+        "_is_permit": True,
+    },
+    # ── Contra Costa County Energy Permits ──────────────────────
+    {
+        "city":    "Contra Costa County",
+        "engine":  "socrata",
+        "url":     "https://data.contracosta.gov/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 50,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%ENERGY AUDIT%' "
+                "OR UPPER(description) LIKE '%WEATHERIZATION%' "
+                "OR UPPER(description) LIKE '%TITLE 24%' "
+                "OR UPPER(description) LIKE '%ENERGY RETROFIT%' "
+                "OR UPPER(description) LIKE '%INSULATION%')"
+            ),
+        },
+        "field_map": {
+            "id":        "permit_number",
+            "address":   "address",
+            "name":      "description",
+            "type":      "permit_type",
+            "year_built": None,
+            "energy_score": None,
+            "owner":     "owner",
+        },
+        "_is_permit": True,
+    },
+    # ── Alameda County Energy Permits ───────────────────────────
+    {
+        "city":    "Alameda County",
+        "engine":  "socrata",
+        "url":     "https://data.acgov.org/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 50,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%ENERGY AUDIT%' "
+                "OR UPPER(description) LIKE '%WEATHERIZATION%' "
+                "OR UPPER(description) LIKE '%TITLE 24%' "
+                "OR UPPER(description) LIKE '%ENERGY RETROFIT%' "
+                "OR UPPER(description) LIKE '%INSULATION%')"
+            ),
+        },
+        "field_map": {
+            "id":        "permit_number",
+            "address":   "address",
+            "name":      "description",
+            "type":      "permit_type",
+            "year_built": None,
+            "energy_score": None,
+            "owner":     "owner",
+        },
+        "_is_permit": True,
+    },
+    # ── Solano County Energy Permits ────────────────────────────
+    {
+        "city":    "Solano County",
+        "engine":  "socrata",
+        "url":     "https://data.solanocounty.com/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 50,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%ENERGY AUDIT%' "
+                "OR UPPER(description) LIKE '%WEATHERIZATION%' "
+                "OR UPPER(description) LIKE '%TITLE 24%' "
+                "OR UPPER(description) LIKE '%ENERGY RETROFIT%' "
+                "OR UPPER(description) LIKE '%INSULATION%')"
+            ),
+        },
+        "field_map": {
+            "id":        "permit_number",
+            "address":   "address",
+            "name":      "description",
+            "type":      "permit_type",
+            "year_built": None,
+            "energy_score": None,
+            "owner":     "owner",
+        },
+        "_is_permit": True,
+    },
 ]
 
 

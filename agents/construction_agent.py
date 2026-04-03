@@ -319,6 +319,246 @@ INSPECTION_SOURCES = [
         },
         "_skip_if_no_data": True,
     },
+    # ── Contra Costa County — Socrata ────────────────────────────
+    {
+        "city":    "Contra Costa County",
+        "engine":  "socrata",
+        "url":     "https://data.contracosta.gov/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
+    # ── Alameda County — Socrata ─────────────────────────────────
+    {
+        "city":    "Alameda County",
+        "engine":  "socrata",
+        "url":     "https://data.acgov.org/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
+    # ── San Mateo County — Socrata ───────────────────────────────
+    {
+        "city":    "San Mateo County",
+        "engine":  "socrata",
+        "url":     "https://data.smcgov.org/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
+    # ── Solano County — Socrata ──────────────────────────────────
+    {
+        "city":    "Solano County",
+        "engine":  "socrata",
+        "url":     "https://data.solanocounty.com/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
+    # ── Marin County — Socrata ───────────────────────────────────
+    {
+        "city":    "Marin County",
+        "engine":  "socrata",
+        "url":     "https://data.marincounty.org/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
+    # ── Napa County — Socrata ────────────────────────────────────
+    {
+        "city":    "Napa County",
+        "engine":  "socrata",
+        "url":     "https://data.countyofnapa.org/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
+    # ── Sonoma County — Socrata ──────────────────────────────────
+    {
+        "city":    "Sonoma County",
+        "engine":  "socrata",
+        "url":     "https://data.sonomacounty.ca.gov/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
+    # ── San Joaquin County — Socrata ─────────────────────────────
+    {
+        "city":    "San Joaquin County",
+        "engine":  "socrata",
+        "url":     "https://data.sjgov.org/resource/building-permits.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%FRAME%' "
+                "OR UPPER(description) LIKE '%INSULATION%' "
+                "OR UPPER(description) LIKE '%ROUGH%')"
+            ),
+        },
+        "field_map": {
+            "id":           "permit_number",
+            "permit_id":    "permit_number",
+            "address":      "address",
+            "inspection":   "description",
+            "status":       "status",
+            "date":         "issued_date",
+            "contractor":   "contractor_name",
+            "lic_number":   "contractor_license",
+            "owner":        "owner",
+            "value":        "valuation",
+        },
+    },
 ]
 
 
@@ -517,7 +757,10 @@ class ConstructionAgent(BaseAgent):
 
         # ── BuildZoom (pago, opcional) ───────────────────────────
         if BUILDZOOM_API_KEY:
-            for city in ["San Francisco", "Oakland", "San Jose"]:
+            for city in ["San Francisco", "Oakland", "San Jose", "Berkeley", "Richmond",
+                         "Fremont", "Hayward", "Concord", "Walnut Creek", "Vallejo",
+                         "Daly City", "San Mateo", "Livermore", "Pleasanton",
+                         "San Rafael", "Napa", "Fairfield"]:
                 try:
                     projects = _fetch_buildzoom_projects(city)
                     for proj in projects:

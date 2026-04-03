@@ -120,6 +120,181 @@ REALESTATE_SOURCES = [
         },
         "_skip_if_no_data": True,
     },
+    # ── Contra Costa County ─────────────────────────────────────
+    {
+        "city":    "Contra Costa County",
+        "engine":  "socrata",
+        "url":     "https://data.contracosta.gov/resource/property-sales.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "sale_date DESC",
+            "$where": (
+                "sale_date >= '{cutoff_iso}' "
+                "AND sale_price > 400000"
+            ),
+        },
+        "field_map": {
+            "id":       "apn",
+            "address":  "property_address",
+            "date":     "sale_date",
+            "price":    "sale_price",
+            "buyer":    "buyer_name",
+            "seller":   "seller_name",
+            "year_built": "year_built",
+        },
+    },
+    # ── San Mateo County ────────────────────────────────────────
+    {
+        "city":    "San Mateo County",
+        "engine":  "socrata",
+        "url":     "https://data.smcgov.org/resource/property-sales.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "sale_date DESC",
+            "$where": (
+                "sale_date >= '{cutoff_iso}' "
+                "AND sale_price > 400000"
+            ),
+        },
+        "field_map": {
+            "id":       "apn",
+            "address":  "property_address",
+            "date":     "sale_date",
+            "price":    "sale_price",
+            "buyer":    "buyer_name",
+            "seller":   "seller_name",
+            "year_built": "year_built",
+        },
+    },
+    # ── Solano County ───────────────────────────────────────────
+    {
+        "city":    "Solano County",
+        "engine":  "socrata",
+        "url":     "https://data.solanocounty.com/resource/property-sales.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "sale_date DESC",
+            "$where": (
+                "sale_date >= '{cutoff_iso}' "
+                "AND sale_price > 300000"
+            ),
+        },
+        "field_map": {
+            "id":       "apn",
+            "address":  "property_address",
+            "date":     "sale_date",
+            "price":    "sale_price",
+            "buyer":    "buyer_name",
+            "seller":   "seller_name",
+            "year_built": "year_built",
+        },
+    },
+    # ── Marin County ────────────────────────────────────────────
+    {
+        "city":    "Marin County",
+        "engine":  "socrata",
+        "url":     "https://data.marincounty.org/resource/property-sales.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "sale_date DESC",
+            "$where": (
+                "sale_date >= '{cutoff_iso}' "
+                "AND sale_price > 400000"
+            ),
+        },
+        "field_map": {
+            "id":       "apn",
+            "address":  "property_address",
+            "date":     "sale_date",
+            "price":    "sale_price",
+            "buyer":    "buyer_name",
+            "seller":   "seller_name",
+            "year_built": "year_built",
+        },
+    },
+    # ── Napa County ─────────────────────────────────────────────
+    {
+        "city":    "Napa County",
+        "engine":  "socrata",
+        "url":     "https://data.countyofnapa.org/resource/property-sales.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "sale_date DESC",
+            "$where": (
+                "sale_date >= '{cutoff_iso}' "
+                "AND sale_price > 300000"
+            ),
+        },
+        "field_map": {
+            "id":       "apn",
+            "address":  "property_address",
+            "date":     "sale_date",
+            "price":    "sale_price",
+            "buyer":    "buyer_name",
+            "seller":   "seller_name",
+            "year_built": "year_built",
+        },
+    },
+    # ── Sonoma County ───────────────────────────────────────────
+    {
+        "city":    "Sonoma County",
+        "engine":  "socrata",
+        "url":     "https://data.sonomacounty.ca.gov/resource/property-sales.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "sale_date DESC",
+            "$where": (
+                "sale_date >= '{cutoff_iso}' "
+                "AND sale_price > 300000"
+            ),
+        },
+        "field_map": {
+            "id":       "apn",
+            "address":  "property_address",
+            "date":     "sale_date",
+            "price":    "sale_price",
+            "buyer":    "buyer_name",
+            "seller":   "seller_name",
+            "year_built": "year_built",
+        },
+    },
+    # ── San Joaquin County ──────────────────────────────────────
+    {
+        "city":    "San Joaquin County",
+        "engine":  "socrata",
+        "url":     "https://data.sjgov.org/resource/property-sales.json",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "params": {
+            "$limit": 100,
+            "$order": "sale_date DESC",
+            "$where": (
+                "sale_date >= '{cutoff_iso}' "
+                "AND sale_price > 250000"
+            ),
+        },
+        "field_map": {
+            "id":       "apn",
+            "address":  "property_address",
+            "date":     "sale_date",
+            "price":    "sale_price",
+            "buyer":    "buyer_name",
+            "seller":   "seller_name",
+            "year_built": "year_built",
+        },
+    },
 ]
 
 

@@ -23,31 +23,89 @@ CENSUS_API_KEY = os.getenv("CENSUS_API_KEY", "")  # Gratis: https://api.census.g
 # Bay Area counties (FIPS codes)
 _BAY_AREA_COUNTIES = {
     "San Francisco":   {"state": "06", "county": "075"},
-    "Alameda":         {"state": "06", "county": "001"},  # Oakland, Berkeley, Fremont, Hayward
-    "Santa Clara":     {"state": "06", "county": "085"},  # San Jose, Sunnyvale, Santa Clara
-    "Contra Costa":    {"state": "06", "county": "013"},  # Richmond
+    "Alameda":         {"state": "06", "county": "001"},
+    "Santa Clara":     {"state": "06", "county": "085"},
+    "Contra Costa":    {"state": "06", "county": "013"},
     "San Mateo":       {"state": "06", "county": "081"},
     "Marin":           {"state": "06", "county": "041"},
+    "Solano":          {"state": "06", "county": "095"},
+    "Napa":            {"state": "06", "county": "055"},
+    "Sonoma":          {"state": "06", "county": "097"},
+    "San Joaquin":     {"state": "06", "county": "077"},
 }
 
 # Mapear ciudad → county
 _CITY_TO_COUNTY = {
-    "san francisco": "San Francisco",
-    "oakland":       "Alameda",
-    "berkeley":      "Alameda",
-    "fremont":       "Alameda",
-    "hayward":       "Alameda",
-    "san jose":      "Santa Clara",
-    "sunnyvale":     "Santa Clara",
-    "santa clara":   "Santa Clara",
-    "richmond":      "Contra Costa",
-    "palo alto":     "Santa Clara",
-    "mountain view": "Santa Clara",
-    "redwood city":  "San Mateo",
-    "daly city":     "San Mateo",
-    "san mateo":     "San Mateo",
-    "concord":       "Contra Costa",
-    "walnut creek":  "Contra Costa",
+    # San Francisco County
+    "san francisco":       "San Francisco",
+    # Alameda County
+    "oakland":             "Alameda",
+    "berkeley":            "Alameda",
+    "fremont":             "Alameda",
+    "hayward":             "Alameda",
+    "dublin":              "Alameda",
+    "alameda":             "Alameda",
+    "san leandro":         "Alameda",
+    "pleasanton":          "Alameda",
+    "livermore":           "Alameda",
+    "newark":              "Alameda",
+    "castro valley":       "Alameda",
+    "san lorenzo":         "Alameda",
+    "emeryville":          "Alameda",
+    "albany":              "Alameda",
+    "union city":          "Alameda",
+    # Santa Clara County
+    "san jose":            "Santa Clara",
+    "sunnyvale":           "Santa Clara",
+    "santa clara":         "Santa Clara",
+    "palo alto":           "Santa Clara",
+    "mountain view":       "Santa Clara",
+    # Contra Costa County
+    "richmond":            "Contra Costa",
+    "concord":             "Contra Costa",
+    "walnut creek":        "Contra Costa",
+    "pleasant hill":       "Contra Costa",
+    "martinez":            "Contra Costa",
+    "clayton":             "Contra Costa",
+    "pittsburg":           "Contra Costa",
+    "lafayette":           "Contra Costa",
+    "orinda":              "Contra Costa",
+    "antioch":             "Contra Costa",
+    "moraga":              "Contra Costa",
+    "alamo":               "Contra Costa",
+    "danville":            "Contra Costa",
+    "hercules":            "Contra Costa",
+    "pinole":              "Contra Costa",
+    "oakley":              "Contra Costa",
+    "san ramon":           "Contra Costa",
+    "brentwood":           "Contra Costa",
+    "el cerrito":          "Contra Costa",
+    # San Mateo County
+    "redwood city":        "San Mateo",
+    "daly city":           "San Mateo",
+    "san mateo":           "San Mateo",
+    "south san francisco": "San Mateo",
+    "san bruno":           "San Mateo",
+    "millbrae":            "San Mateo",
+    "burlingame":          "San Mateo",
+    # Solano County
+    "benicia":             "Solano",
+    "fairfield":           "Solano",
+    "vallejo":             "Solano",
+    "suisun city":         "Solano",
+    "rio vista":           "Solano",
+    "vacaville":           "Solano",
+    # Napa County
+    "napa":                "Napa",
+    # Sonoma County
+    "sonoma":              "Sonoma",
+    "petaluma":            "Sonoma",
+    # Marin County
+    "novato":              "Marin",
+    "san rafael":          "Marin",
+    # San Joaquin County
+    "tracy":               "San Joaquin",
+    "stockton":            "San Joaquin",
 }
 
 # Cache de datos demográficos por county

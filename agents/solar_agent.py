@@ -242,6 +242,198 @@ SOLAR_SOURCES = [
         "_date_cutoff": None,
         "_date_field":  "ISSUEDATE",
     },
+    # ── Contra Costa County — Socrata ────────────────────────────
+    {
+        "city": "Contra Costa County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.contracosta.gov/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
+    # ── San Mateo County — Socrata ───────────────────────────────
+    {
+        "city": "San Mateo County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.smcgov.org/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
+    # ── Solano County — Socrata ──────────────────────────────────
+    {
+        "city": "Solano County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.solanocounty.com/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
+    # ── Marin County — Socrata ───────────────────────────────────
+    {
+        "city": "Marin County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.marincounty.org/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
+    # ── Napa County — Socrata ────────────────────────────────────
+    {
+        "city": "Napa County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.countyofnapa.org/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
+    # ── Sonoma County — Socrata ──────────────────────────────────
+    {
+        "city": "Sonoma County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.sonomacounty.ca.gov/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
+    # ── San Joaquin County — Socrata ─────────────────────────────
+    {
+        "city": "San Joaquin County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.sjgov.org/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
+    # ── Alameda County — Socrata ─────────────────────────────────
+    {
+        "city": "Alameda County",
+        "engine": "socrata",
+        "timeout": SOURCE_TIMEOUT,
+        "_skip_if_no_data": True,
+        "url": "https://data.acgov.org/resource/building-permits.json",
+        "params": {
+            "$limit": 100,
+            "$order": "issued_date DESC",
+            "$where": (
+                "issued_date >= '{cutoff_iso}' "
+                "AND (UPPER(description) LIKE '%SOLAR%' "
+                "OR UPPER(description) LIKE '%PHOTOVOLTAIC%' "
+                "OR UPPER(description) LIKE '%PV%')"
+            ),
+        },
+        "field_map": {
+            "id":"permit_number","address":"address",
+            "desc":"description","status":"status","date":"issued_date",
+            "contractor":"contractor_name","lic":"contractor_license",
+            "owner":"owner","value":"valuation",
+        },
+    },
 ]
 
 
@@ -292,6 +484,33 @@ _CITY_COORDS = {
     "Santa Clara":   (37.3541, -121.9552),
     "Berkeley":      (37.8716, -122.2727),
     "Richmond":      (37.9358, -122.3477),
+    "Contra Costa County": (37.9535, -122.0311),
+    "Alameda County":      (37.6017, -121.7195),
+    "San Mateo County":    (37.5630, -122.3255),
+    "Solano County":       (38.2494, -121.9400),
+    "Marin County":        (38.0834, -122.7633),
+    "Napa County":         (38.2975, -122.2869),
+    "Sonoma County":       (38.2921, -122.4580),
+    "San Joaquin County":  (37.9577, -121.2908),
+    "Walnut Creek":   (37.9101, -122.0652),
+    "Concord":        (37.9780, -122.0311),
+    "Pleasanton":     (37.6624, -121.8747),
+    "Hayward":        (37.6688, -122.0808),
+    "Fremont":        (37.5485, -121.9886),
+    "Daly City":      (37.6879, -122.4702),
+    "San Mateo":      (37.5630, -122.3255),
+    "Vallejo":        (38.1041, -122.2566),
+    "Fairfield":      (38.2494, -122.0400),
+    "Napa":           (38.2975, -122.2869),
+    "San Rafael":     (37.9735, -122.5311),
+    "Novato":         (38.1074, -122.5697),
+    "Petaluma":       (38.2324, -122.6367),
+    "Tracy":          (37.7397, -121.4252),
+    "Stockton":       (37.9577, -121.2908),
+    "Antioch":        (38.0049, -121.8058),
+    "Pittsburg":      (38.0280, -121.8847),
+    "Dublin":         (37.7022, -121.9358),
+    "Livermore":      (37.6819, -121.7680),
 }
 
 
@@ -662,7 +881,10 @@ class SolarAgent(BaseAgent):
 
         # ── Aurora Solar: proyectos activos de diseño (pago) ─────
         if AURORA_API_KEY:
-            for city_name in ["San Francisco", "Oakland", "San Jose"]:
+            for city_name in ["San Francisco", "Oakland", "San Jose",
+                                "Fremont", "Hayward", "Concord", "Walnut Creek",
+                                "Richmond", "Berkeley", "Sunnyvale", "Santa Clara",
+                                "Daly City", "Vallejo"]:
                 try:
                     projects = _fetch_aurora_projects(city_name)
                     for proj in projects:
@@ -699,7 +921,9 @@ class SolarAgent(BaseAgent):
         # ── EnergySage: compradores activos (pago) ──────────────
         if ENERGYSAGE_KEY:
             bay_area_zips = ["94102", "94607", "95112", "94538", "94704",
-                             "94087", "94805", "94025", "94014"]
+                             "94087", "94805", "94025", "94014",
+                             "94520", "94596", "94590", "94903", "94558",
+                             "94501", "94568", "94588", "95376", "94533"]
             for zip_code in bay_area_zips:
                 try:
                     es_leads = _fetch_energysage_leads(zip_code)

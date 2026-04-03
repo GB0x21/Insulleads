@@ -18,8 +18,16 @@ NOAA_ZONES = [
     {"zone": "CAZ006", "name": "San Francisco"},
     {"zone": "CAZ007", "name": "Alameda / Oakland"},
     {"zone": "CAZ508", "name": "Santa Clara Valley"},
-    {"zone": "CAZ511", "name": "East Bay Interior"},
+    {"zone": "CAZ511", "name": "East Bay Interior Valleys"},
     {"zone": "CAZ013", "name": "Contra Costa"},
+    {"zone": "CAZ505", "name": "San Mateo County Coast"},
+    {"zone": "CAZ509", "name": "San Mateo County Interior"},
+    {"zone": "CAZ017", "name": "Sonoma County"},
+    {"zone": "CAZ018", "name": "Napa County"},
+    {"zone": "CAZ019", "name": "Solano County"},
+    {"zone": "CAZ014", "name": "Marin County"},
+    {"zone": "CAZ516", "name": "San Joaquin Valley — North"},
+    {"zone": "CAZ530", "name": "Eastern Contra Costa"},
 ]
 
 NOAA_BASE = "https://api.weather.gov/alerts/active"
