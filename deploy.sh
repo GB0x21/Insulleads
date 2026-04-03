@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+# Evitar prompts interactivos durante apt upgrade
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 APP_USER="insulleads"
 APP_DIR="/home/${APP_USER}/Insulleads"
 REPO_URL="https://github.com/GB0x21/Insulleads.git"
@@ -29,11 +33,11 @@ fi
 
 # ── 2. Actualizar sistema ─────────────────────────────────
 echo "[1/8] Actualizando sistema..."
-apt update -qq && apt upgrade -y -qq
+apt update -qq && apt upgrade -y -qq -o Dpkg::Options::="--force-confold"
 
 # ── 3. Instalar dependencias ──────────────────────────────
 echo "[2/8] Instalando Python 3, pip, git..."
-apt install -y -qq python3 python3-pip python3-venv git curl
+apt install -y -qq -o Dpkg::Options::="--force-confold" python3 python3-pip python3-venv git curl
 
 # ── 4. Crear usuario ──────────────────────────────────────
 echo "[3/8] Creando usuario '${APP_USER}'..."
