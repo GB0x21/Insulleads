@@ -268,6 +268,139 @@ def _build_sources() -> list:
                 "url_tpl":"https://permits.cityofberkeley.info/eTRAKiT/",
             },
         },
+
+        # ── Palo Alto ─────────────────────────────────────────────
+        {
+            "city": "Palo Alto", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.cityofpaloalto.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"property_owner","value":"valuation",
+                "url_tpl":"https://www.cityofpaloalto.org/Departments/Development-Services",
+            },
+        },
+
+        # ── Mountain View ─────────────────────────────────────────
+        {
+            "city": "Mountain View", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.mountainview.gov/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issue_date DESC",
+                "$where": f"issue_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issue_date",
+                "contractor":"contractor","lic_number":"license_number",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.mountainview.gov/depts/comdev/building/",
+            },
+        },
+
+        # ── Redwood City ──────────────────────────────────────────
+        {
+            "city": "Redwood City", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.redwoodcity.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"applied_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner_name","value":"job_value",
+                "url_tpl":"https://www.redwoodcity.org/departments/community-development-department/building-division",
+            },
+        },
+
+        # ── Daly City ─────────────────────────────────────────────
+        {
+            "city": "Daly City", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.dalycity.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor","lic_number":"license_number",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.dalycity.org/405/Building-Division",
+            },
+        },
+
+        # ── San Mateo ─────────────────────────────────────────────
+        {
+            "city": "San Mateo", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.cityofsanmateo.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.cityofsanmateo.org/3012/Building",
+            },
+        },
+
+        # ── Concord ───────────────────────────────────────────────
+        {
+            "city": "Concord", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.concordca.gov/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor_name","lic_number":"contractor_license",
+                "owner":"owner_name","value":"valuation",
+                "url_tpl":"https://www.cityofconcord.org/349/Building-Division",
+            },
+        },
+
+        # ── Walnut Creek ──────────────────────────────────────────
+        {
+            "city": "Walnut Creek", "engine": "socrata", "_skip_if_no_data": True,
+            "url": "https://data.walnut-creek.org/resource/building-permits.json",
+            "timeout": SOURCE_TIMEOUT,
+            "params": {
+                "$limit": 200, "$order": "issued_date DESC",
+                "$where": f"issued_date >= '{cutoff_iso}'",
+            },
+            "field_map": {
+                "id":"permit_number","address":"address","address2":None,
+                "permit_type":"permit_type","description":"description","status":"status",
+                "filed_date":"application_date","issued_date":"issued_date",
+                "contractor":"contractor","lic_number":"license_number",
+                "owner":"owner","value":"valuation",
+                "url_tpl":"https://www.walnut-creek.org/departments/community-development/building",
+            },
+        },
     ]
 
 
