@@ -45,6 +45,7 @@ from agents.energy_agent     import EnergyAgent
 from agents.places_agent     import PlacesAgent
 from agents.yelp_agent         import YelpAgent
 from agents.construction_agent import ConstructionAgent
+from agents.deconstruction_agent import DeconstuctionAgent
 
 # ── Registro de agentes ────────────────────────────────────────────
 AGENT_REGISTRY = {
@@ -57,6 +58,7 @@ AGENT_REGISTRY = {
     "energy":       {"class": EnergyAgent,        "env_key": "AGENT_ENERGY",       "interval_key": "INTERVAL_ENERGY",       "default_interval": 360},
     "places":       {"class": PlacesAgent,        "env_key": "AGENT_PLACES",       "interval_key": "INTERVAL_PLACES",       "default_interval": 1440},
     "yelp":         {"class": YelpAgent,          "env_key": "AGENT_YELP",         "interval_key": "INTERVAL_YELP",         "default_interval": 1440},
+    "deconstruction": {"class": DeconstuctionAgent, "env_key": "AGENT_DECONSTRUCTION", "interval_key": "INTERVAL_DECONSTRUCTION", "default_interval": 120},
 }
 
 # ⚡ Instancias singleton — creadas UNA sola vez
