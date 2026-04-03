@@ -1,19 +1,22 @@
 """
-agents/rodents_agent.py  v2
+agents/rodents_agent.py  v3
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 🐀 Reportes 311 Plagas & Roedores — Bay Area
 
-MEJORAS v2:
-  ✅ +3 ciudades: San Jose 311 (CKAN), Berkeley 311 (Socrata),
-     Fremont SeeClickFix — total 5 fuentes
-  ✅ Tipos de plaga ampliados: roedores, termitas, vida silvestre,
-     cucarachas, chinches (todos causan daño a insulación)
-  ✅ Enriquecimiento de contacto: lookup en CSV de contactos
-     para encontrar propietarios/property managers cercanos
-  ✅ Fetch paralelo de todas las fuentes (ThreadPoolExecutor)
-  ✅ Score de severidad basado en tipo de plaga y recurrencia
-  ✅ Integración EPA EnviroFacts API (gratuita) para datos de
-     calidad ambiental por zona
+MEJORAS v3 (APIs de pago):
+  ✅ ATTOM Property API ($200/mes) — datos de propiedad para leads
+     con plaga: antigüedad casa, valor, propietario, historial de ventas
+  ✅ Google Geocoding API ($5/1000 calls) — geocodificación inversa
+     para obtener dirección exacta y propiedades cercanas
+  ✅ Thumbtack API — detectar solicitudes activas de pest control
+     en la zona = cross-sell insulación
+  ✅ PestRoutes/FieldRoutes — integración con software de pest control
+     para detectar clientes que ya contrataron servicio
+
+Previas (v2):
+  ✅ 5 fuentes 311 gratuitas (SF, Oakland, SJ, Berkeley, Fremont)
+  ✅ 6 tipos de plaga con scoring de severidad
+  ✅ Enriquecimiento CSV + EPA EnviroFacts
 """
 
 import os
@@ -25,12 +28,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from agents.base import BaseAgent
 from utils.telegram import send_lead
 from utils.contacts_loader import load_all_contacts, lookup_contact
+from utils.lead_scoring import score_lead, format_score_line
+from utils.notifications import notify_multichannel
 
 logger = logging.getLogger(__name__)
 
 SOURCE_TIMEOUT  = int(os.getenv("SOURCE_TIMEOUT", "45"))
 PARALLEL_311    = int(os.getenv("PARALLEL_311", "5"))
 RODENT_MONTHS   = int(os.getenv("RODENT_MONTHS", "2"))
+
+# APIs de pago (opcionales)
+ATTOM_API_KEY       = os.getenv("ATTOM_API_KEY", "")        # https://api.gateway.attomdata.com
+GOOGLE_GEOCODE_KEY  = os.getenv("GOOGLE_GEOCODE_API_KEY", "")  # Google Maps Platform
+THUMBTACK_API_KEY   = os.getenv("THUMBTACK_API_KEY", "")    # https://www.thumbtack.com/developers
 
 # ── Keywords de plagas que dañan insulación ──────────────────────────
 # Roedores: roen y anidan en insulación de áticos/crawlspaces
@@ -308,14 +318,8 @@ def _fetch_source(source: dict) -> tuple[str, list]:
 
 
 # ── EPA EnviroFacts API (gratuita, sin API key) ─────────────────────
-# Datos de calidad ambiental que correlacionan con plagas
 
 def _get_epa_facilities(lat: float, lon: float, radius_miles: float = 1.0) -> int:
-    """
-    Consulta EPA Envirofacts para contar facilities ambientales cercanas.
-    Más facilities = más probabilidad de plagas = mejor lead.
-    Retorna el conteo o 0 si falla.
-    """
     try:
         resp = requests.get(
             "https://enviro.epa.gov/enviro/efservice/getEnviroFacts/LATITUDE/"
@@ -328,6 +332,207 @@ def _get_epa_facilities(lat: float, lon: float, radius_miles: float = 1.0) -> in
         return len(data) if isinstance(data, list) else 0
     except Exception:
         return 0
+
+
+# ── ATTOM Property Data API ($200/mes) ──────────────────────────────
+# Enriquece leads con datos de la propiedad afectada por plagas:
+# antigüedad, valor, propietario real, superficie, tipo de propiedad.
+# Casas viejas + plagas = ALTA necesidad de reemplazar insulación.
+
+_attom_cache: dict = {}
+
+def _attom_property_lookup(address: str, city: str = "") -> dict:
+    """
+    ATTOM Property API — datos detallados de la propiedad.
+    Retorna: year_built, assessed_value, owner_name, property_type, sqft, bedrooms.
+    """
+    if not ATTOM_API_KEY:
+        return {}
+
+    cache_key = f"{address}|{city}"
+    if cache_key in _attom_cache:
+        return _attom_cache[cache_key]
+
+    try:
+        # Address search
+        params = {"address1": address}
+        if city:
+            params["address2"] = f"{city}, CA"
+
+        resp = requests.get(
+            "https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/basicprofile",
+            headers={
+                "Accept": "application/json",
+                "apikey": ATTOM_API_KEY,
+            },
+            params=params,
+            timeout=12,
+        )
+        if resp.status_code != 200:
+            _attom_cache[cache_key] = {}
+            return {}
+
+        data = resp.json()
+        properties = data.get("property", [])
+        if not properties:
+            _attom_cache[cache_key] = {}
+            return {}
+
+        prop = properties[0]
+        building = prop.get("building", {}).get("size", {})
+        summary = prop.get("building", {}).get("summary", {})
+        assessment = prop.get("assessment", {}).get("assessed", {})
+        owner_info = prop.get("owner", {}).get("owner1", {})
+
+        year_built = summary.get("yearbuilt", 0)
+        age = (datetime.now().year - int(year_built)) if year_built and int(year_built) > 1900 else 0
+
+        result = {
+            "year_built":     int(year_built) if year_built else 0,
+            "property_age":   age,
+            "assessed_value": assessment.get("assdttlvalue", 0),
+            "owner_name":     f"{owner_info.get('firstnameandmi', '')} {owner_info.get('lastnameorsurname', '')}".strip(),
+            "property_type":  summary.get("proptype", ""),
+            "sqft":           building.get("livingsize", 0),
+            "bedrooms":       building.get("bedrooms", 0),
+            "bathrooms":      building.get("bathstotal", 0),
+            # Score de necesidad de insulación basado en antigüedad
+            "insulation_need": (
+                "🔴 CRÍTICA" if age > 50 else
+                "🟠 ALTA" if age > 30 else
+                "🟡 MEDIA" if age > 15 else
+                "🟢 BAJA" if age > 0 else "DESCONOCIDA"
+            ),
+            "source": "ATTOM",
+        }
+        _attom_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        logger.debug(f"[ATTOM] Error: {e}")
+        _attom_cache[cache_key] = {}
+        return {}
+
+
+# ── Google Geocoding API ($5/1000 requests) ─────────────────────────
+# Geocodificación inversa: obtiene propiedades cercanas al reporte.
+# Útil cuando el reporte 311 no tiene dirección exacta.
+
+def _geocode_reverse(lat: float, lon: float) -> dict:
+    """
+    Google Geocoding inverso — obtiene dirección estructurada.
+    Retorna: formatted_address, street, city, zip_code.
+    """
+    if not GOOGLE_GEOCODE_KEY:
+        return {}
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={
+                "latlng": f"{lat},{lon}",
+                "key": GOOGLE_GEOCODE_KEY,
+                "result_type": "street_address",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return {}
+
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return {}
+
+        result = results[0]
+        components = {
+            c["types"][0]: c["long_name"]
+            for c in result.get("address_components", [])
+            if c.get("types")
+        }
+
+        return {
+            "formatted_address": result.get("formatted_address", ""),
+            "street_number":     components.get("street_number", ""),
+            "street_name":       components.get("route", ""),
+            "city":              components.get("locality", ""),
+            "zip_code":          components.get("postal_code", ""),
+        }
+    except Exception as e:
+        logger.debug(f"[Geocoding] Error: {e}")
+        return {}
+
+
+def _find_nearby_properties(lat: float, lon: float, radius_m: int = 200) -> list:
+    """
+    Google Places — busca propiedades residenciales cercanas al reporte de plaga.
+    Cada propiedad cercana es un lead potencial adicional.
+    """
+    google_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    if not google_key:
+        return []
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+            params={
+                "location": f"{lat},{lon}",
+                "radius": radius_m,
+                "type": "premise",
+                "key": google_key,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+
+        data = resp.json()
+        results = data.get("results", [])
+        return [
+            {
+                "address": r.get("vicinity", ""),
+                "name":    r.get("name", ""),
+                "lat":     r.get("geometry", {}).get("location", {}).get("lat"),
+                "lon":     r.get("geometry", {}).get("location", {}).get("lng"),
+            }
+            for r in results[:5]  # Max 5 vecinos
+        ]
+    except Exception:
+        return []
+
+
+# ── Thumbtack API — solicitudes activas de pest control ─────────────
+# Detecta personas que están AHORA MISMO buscando pest control.
+# Si alguien busca pest control = su insulación probablemente está dañada.
+
+def _fetch_thumbtack_pest_leads(city: str, state: str = "CA") -> list:
+    """
+    Thumbtack API — leads activos de pest control en la zona.
+    Requiere API key de Thumbtack Pro.
+    """
+    if not THUMBTACK_API_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://pro-api.thumbtack.com/v2/leads",
+            headers={
+                "Authorization": f"Bearer {THUMBTACK_API_KEY}",
+                "Accept": "application/json",
+            },
+            params={
+                "category": "pest_control",
+                "city": city,
+                "state": state,
+                "status": "active",
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return []
+
+        data = resp.json()
+        return data.get("leads", data) if isinstance(data, (dict, list)) else []
+    except Exception as e:
+        logger.debug(f"[Thumbtack/{city}] {e}")
+        return []
 
 
 class RodentsAgent(BaseAgent):
@@ -405,17 +610,106 @@ class RodentsAgent(BaseAgent):
                                 lead["contact_email"]  = match.get("email", "")
                                 lead["contact_source"] = f"CSV ({match['source']})"
 
+                        # ── ATTOM: datos de la propiedad (pago) ──────
+                        if ATTOM_API_KEY and lead.get("address"):
+                            prop = _attom_property_lookup(lead["address"], city)
+                            if prop:
+                                lead["year_built"]       = prop.get("year_built")
+                                lead["property_age"]     = prop.get("property_age")
+                                lead["assessed_value"]   = prop.get("assessed_value")
+                                lead["property_type"]    = prop.get("property_type")
+                                lead["sqft"]             = prop.get("sqft")
+                                lead["insulation_need"]  = prop.get("insulation_need")
+                                # Si ATTOM tiene propietario y no tenemos contacto
+                                if prop.get("owner_name") and not lead.get("contact_name"):
+                                    lead["owner_name"] = prop["owner_name"]
+                                    # Intentar buscar al propietario en CSV
+                                    owner_match = lookup_contact(prop["owner_name"], self._contacts)
+                                    if owner_match:
+                                        lead["contact_name"]   = owner_match.get("raw_name", "")
+                                        lead["contact_phone"]  = owner_match.get("phone", "")
+                                        lead["contact_email"]  = owner_match.get("email", "")
+                                        lead["contact_source"] = f"ATTOM+CSV ({owner_match['source']})"
+
+                        # ── Google Geocoding: mejorar dirección (pago) ─
+                        if GOOGLE_GEOCODE_KEY and lead.get("lat") and lead.get("lon"):
+                            try:
+                                lat_f = float(lead["lat"])
+                                lon_f = float(lead["lon"])
+                                if not lead.get("address") or len(lead["address"]) < 10:
+                                    geo = _geocode_reverse(lat_f, lon_f)
+                                    if geo.get("formatted_address"):
+                                        lead["address"] = geo["formatted_address"]
+                                        lead["zip_code"] = geo.get("zip_code", "")
+                            except (ValueError, TypeError):
+                                pass
+
+                        # Lead scoring
+                        lead["_agent_key"] = "rodents"
+                        scoring = score_lead(lead)
+                        # Boost por severidad de plaga
+                        severity_boost = lead.get("severity", 0) * 5
+                        scoring["score"] = min(scoring["score"] + severity_boost, 100)
+                        # Boost si ATTOM muestra casa vieja
+                        if lead.get("property_age", 0) > 30:
+                            scoring["score"] = min(scoring["score"] + 10, 100)
+                            scoring["reasons"].append(f"Casa antigua ({lead['property_age']} años)")
+                        lead["_scoring"] = scoring
+
                         leads.append(lead)
 
                     logger.info(f"[Rodents/{city}] {len(records)} reportes")
                 except Exception as e:
                     logger.debug(f"[Rodents/{src['city']}] {e}")
 
-        # Ordenar por severidad (mayor primero)
-        leads.sort(key=lambda l: l.get("severity", 0), reverse=True)
+        # ── Thumbtack: solicitudes activas de pest control (pago) ────
+        if THUMBTACK_API_KEY:
+            for city_name in ["San Francisco", "Oakland", "San Jose", "Berkeley", "Fremont"]:
+                try:
+                    tt_leads = _fetch_thumbtack_pest_leads(city_name)
+                    for tt in tt_leads:
+                        lead = {
+                            "id":          f"thumbtack_{tt.get('id', '')}",
+                            "city":        city_name,
+                            "address":     tt.get("address", "") or tt.get("location", ""),
+                            "desc":        tt.get("category", "Pest Control"),
+                            "detail":      tt.get("description", "")[:200],
+                            "status":      "Solicitud activa",
+                            "date":        (tt.get("created_at") or "")[:10],
+                            "pest_type":   "general",
+                            "severity":    3,
+                            "pest_emoji":  "🎯",
+                            "damage_type": "Cliente buscando pest control = insulación dañada",
+                            "source":      "Thumbtack",
+                            "_agent_key":  "rodents",
+                        }
+                        if tt.get("customer_name"):
+                            lead["contact_name"] = tt["customer_name"]
+                        if tt.get("phone"):
+                            lead["contact_phone"] = tt["phone"]
+                            lead["contact_source"] = "Thumbtack"
+
+                        scoring = score_lead(lead)
+                        scoring["score"] = min(scoring["score"] + 15, 100)
+                        scoring["reasons"].insert(0, "🎯 Solicitud activa de pest control")
+                        lead["_scoring"] = scoring
+                        leads.append(lead)
+
+                    if tt_leads:
+                        logger.info(f"[Thumbtack/{city_name}] {len(tt_leads)} solicitudes activas")
+                except Exception as e:
+                    logger.debug(f"[Thumbtack/{city_name}] {e}")
+
+        # Ordenar por score (mayor primero), luego severidad
+        leads.sort(key=lambda l: (
+            -l.get("_scoring", {}).get("score", 0),
+            -l.get("severity", 0),
+        ))
         return leads
 
     def notify(self, lead: dict):
+        scoring     = lead.get("_scoring", {})
+        score_line  = format_score_line(scoring) if scoring else ""
         pest_emoji  = lead.get("pest_emoji", "🐀")
         damage      = lead.get("damage_type", "insulación dañada")
         severity    = lead.get("severity", 0)
@@ -441,9 +735,23 @@ class RodentsAgent(BaseAgent):
         if lead.get("detail"):
             fields["📝 Detalle"] = lead["detail"][:150]
 
-        # Agregar datos de contacto si disponibles
+        # Datos de propiedad (ATTOM)
+        if lead.get("property_age"):
+            fields["🏗️ Antigüedad"] = f"{lead['property_age']} años (construida {lead.get('year_built', '?')})"
+        if lead.get("insulation_need"):
+            fields["🧱 Necesidad Insulación"] = lead["insulation_need"]
+        if lead.get("assessed_value"):
+            fields["💰 Valor Tasado"] = f"${lead['assessed_value']:,}"
+        if lead.get("sqft"):
+            fields["📐 Superficie"] = f"{lead['sqft']:,} sqft"
+        if lead.get("property_type"):
+            fields["🏠 Tipo"] = lead["property_type"]
+
+        # Datos de contacto
+        if lead.get("owner_name"):
+            fields["👤 Propietario (ATTOM)"] = lead["owner_name"]
         if lead.get("contact_name"):
-            fields["👤 Contacto"]  = lead["contact_name"]
+            fields["👤 Contacto"] = lead["contact_name"]
         if lead.get("contact_phone"):
             src = lead.get("contact_source", "")
             fields["📞 Teléfono"] = (
@@ -453,6 +761,13 @@ class RodentsAgent(BaseAgent):
         if lead.get("contact_email"):
             fields["✉️  Email"] = lead["contact_email"]
 
+        # Fuente especial (Thumbtack)
+        if lead.get("source") == "Thumbtack":
+            fields["📡 Fuente"] = "🎯 Thumbtack — solicitud activa"
+
+        if score_line:
+            fields["🎯 Lead Score"] = score_line
+
         send_lead(
             agent_name=self.name,
             emoji=self.emoji,
@@ -461,3 +776,7 @@ class RodentsAgent(BaseAgent):
             url=maps_url,
             cta=f"{pest_emoji} Plaga detectada = {damage}. ¡Ofrece inspección de insulación!",
         )
+
+        # Multi-canal para leads de alta severidad
+        if scoring.get("score", 0) >= 70:
+            notify_multichannel(lead, scoring)

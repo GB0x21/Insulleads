@@ -1,16 +1,21 @@
 """
-agents/solar_agent.py  v7
+agents/solar_agent.py  v8
 ━━━━━━━━━━━━━━━━━━━━━━━
 ☀️ Instalaciones Solares — Bay Area
 
-MEJORAS v7:
-  ✅ +5 ciudades Bay Area (Oakland, Sunnyvale, Santa Clara, Berkeley, Richmond)
-     vía Socrata con filtro solar server-side
-  ✅ Integración NREL Solar Resource API (gratuita con API key)
-     para enriquecer leads con potencial solar de la zona
-  ✅ Fetch paralelo de todas las ciudades (ThreadPoolExecutor)
-  ✅ Keywords solares ampliados (battery storage, EV charger, energy upgrade)
-  ✅ Score de prioridad basado en valor + potencial solar
+MEJORAS v8 (APIs de pago):
+  ✅ Google Solar API ($0.40/request) — potencial solar a nivel de edificio
+     Datos: panel count, sqft de techo, ahorro anual estimado, orientación
+  ✅ Aurora Solar API ($100+/mes) — pipeline de proyectos solares activos
+     Detecta propuestas en progreso = instalación inminente
+  ✅ EnergySage API — marketplace de solar, compradores activos buscando
+     cotizaciones = oportunidad inmediata de cross-sell insulación
+  ✅ OpenEI Utility Rates API (gratuita) — tarifas eléctricas por zona
+     Áreas con tarifa alta = mayor incentivo para solar+insulación
+
+Previas (v7):
+  ✅ 7 ciudades con permisos solares (Socrata/CKAN)
+  ✅ NREL Solar Resource API + keywords ampliados + fetch paralelo
 """
 
 import os
@@ -23,6 +28,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from agents.base import BaseAgent
 from utils.telegram import send_lead
 from utils.contacts_loader import load_all_contacts, lookup_contact
+from utils.lead_scoring import score_lead, format_score_line
+from utils.notifications import notify_multichannel
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +37,10 @@ SOURCE_TIMEOUT   = int(os.getenv("SOURCE_TIMEOUT", "45"))
 MIN_PERMIT_VALUE = float(os.getenv("MIN_PERMIT_VALUE", "50000"))
 PERMIT_MONTHS    = int(os.getenv("PERMIT_MONTHS", "3"))
 PARALLEL_SOLAR   = int(os.getenv("PARALLEL_SOLAR", "6"))
-NREL_API_KEY     = os.getenv("NREL_API_KEY", "")  # Free: https://developer.nrel.gov/signup/
+NREL_API_KEY     = os.getenv("NREL_API_KEY", "")        # Free: https://developer.nrel.gov/signup/
+GOOGLE_SOLAR_KEY = os.getenv("GOOGLE_SOLAR_API_KEY", "")  # $0.40/request
+AURORA_API_KEY   = os.getenv("AURORA_API_KEY", "")       # Aurora Solar
+ENERGYSAGE_KEY   = os.getenv("ENERGYSAGE_API_KEY", "")   # EnergySage marketplace
 
 # Keywords ampliados — solar + proyectos relacionados con energía
 SOLAR_KW = [
@@ -285,6 +295,196 @@ _CITY_COORDS = {
 }
 
 
+# ── Google Solar API ($0.40/request) ─────────────────────────────────
+# Potencial solar a nivel de edificio individual.
+# Datos: orientación de techo, panel count, ahorro anual, CO₂ offset.
+# Requiere: Google Cloud + Solar API habilitada.
+
+_google_solar_cache: dict = {}
+
+def _google_solar_lookup(lat: float, lon: float) -> dict:
+    """
+    Google Solar API — Building Insights.
+    Retorna potencial solar del edificio específico.
+    """
+    if not GOOGLE_SOLAR_KEY:
+        return {}
+
+    cache_key = f"{lat:.5f},{lon:.5f}"
+    if cache_key in _google_solar_cache:
+        return _google_solar_cache[cache_key]
+
+    try:
+        resp = requests.get(
+            "https://solar.googleapis.com/v1/buildingInsights:findClosest",
+            params={
+                "location.latitude": lat,
+                "location.longitude": lon,
+                "requiredQuality": "MEDIUM",
+                "key": GOOGLE_SOLAR_KEY,
+            },
+            timeout=12,
+        )
+        if resp.status_code != 200:
+            _google_solar_cache[cache_key] = {}
+            return {}
+
+        data = resp.json()
+        solar_potential = data.get("solarPotential", {})
+        best_config = (solar_potential.get("solarPanelConfigs") or [{}])[-1]  # Max config
+
+        result = {
+            "max_panels":       solar_potential.get("maxArrayPanelsCount", 0),
+            "max_area_sqft":    round(solar_potential.get("maxArrayAreaMeters2", 0) * 10.764, 0),
+            "roof_sqft":        round(solar_potential.get("wholeRoofStats", {}).get("areaMeters2", 0) * 10.764, 0),
+            "annual_kwh":       round(best_config.get("yearlyEnergyDcKwh", 0), 0),
+            "panel_capacity_w": solar_potential.get("panelCapacityWatts", 400),
+            "max_sunshine_hrs": solar_potential.get("maxSunshineHoursPerYear", 0),
+            "carbon_offset_kg": round(solar_potential.get("carbonOffsetFactorKgPerMwh", 0) *
+                                     best_config.get("yearlyEnergyDcKwh", 0) / 1000, 0),
+            "source": "Google Solar",
+        }
+        _google_solar_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        logger.debug(f"[Google Solar] Error: {e}")
+        _google_solar_cache[cache_key] = {}
+        return {}
+
+
+# ── Aurora Solar API ($100+/mes) ─────────────────────────────────────
+# Plataforma de diseño solar. Su API expone propuestas/proyectos activos.
+# Un proyecto en Aurora = instalación solar inminente = oportunidad.
+
+def _fetch_aurora_projects(city: str = "") -> list:
+    """
+    Aurora Solar API — proyectos activos de diseño solar.
+    Requiere API key de Aurora Solar (tier Business+).
+    """
+    if not AURORA_API_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://api-sandbox.aurorasolar.com/v2019.01.01/projects",
+            headers={
+                "Authorization": f"Bearer {AURORA_API_KEY}",
+                "Accept": "application/json",
+            },
+            params={
+                "status": "active,proposal_sent",
+                "sort": "-created_at",
+                "per_page": 50,
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return []
+
+        data = resp.json()
+        projects = data.get("projects", data) if isinstance(data, (dict, list)) else []
+
+        # Filtrar por ciudad si se especifica
+        if city and isinstance(projects, list):
+            projects = [p for p in projects
+                       if city.lower() in (p.get("city", "") or "").lower()
+                       or city.lower() in (p.get("address", "") or "").lower()]
+
+        return projects if isinstance(projects, list) else []
+    except Exception as e:
+        logger.debug(f"[Aurora/{city}] {e}")
+        return []
+
+
+# ── EnergySage API — marketplace de compradores de solar ─────────────
+# Personas que están ACTIVAMENTE buscando cotizaciones de solar.
+# Cross-sell: "Si vas a instalar solar, ¿ya revisaste tu insulación?"
+
+def _fetch_energysage_leads(zip_code: str = "") -> list:
+    """
+    EnergySage API — leads activos en el marketplace.
+    Requiere partner API key.
+    """
+    if not ENERGYSAGE_KEY:
+        return []
+    try:
+        params = {"status": "active", "per_page": 25}
+        if zip_code:
+            params["zip_code"] = zip_code
+
+        resp = requests.get(
+            "https://api.energysage.com/v1/leads",
+            headers={
+                "Authorization": f"Token {ENERGYSAGE_KEY}",
+                "Accept": "application/json",
+            },
+            params=params,
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return []
+
+        data = resp.json()
+        return data.get("results", data) if isinstance(data, (dict, list)) else []
+    except Exception as e:
+        logger.debug(f"[EnergySage] {e}")
+        return []
+
+
+# ── OpenEI Utility Rate API (gratuita) ──────────────────────────────
+# Tarifas eléctricas por utility/zona. Tarifa alta = más incentivo
+# para solar + insulación (mayor ahorro potencial).
+
+_utility_rate_cache: dict = {}
+
+def _get_utility_rate(lat: float, lon: float) -> dict:
+    """
+    OpenEI Utility Rate Database API — tarifa eléctrica de la zona.
+    Gratuita, no requiere API key.
+    """
+    cache_key = f"{lat:.2f},{lon:.2f}"
+    if cache_key in _utility_rate_cache:
+        return _utility_rate_cache[cache_key]
+
+    try:
+        resp = requests.get(
+            "https://developer.nrel.gov/api/utility_rates/v3.json",
+            params={
+                "api_key": NREL_API_KEY or "DEMO_KEY",
+                "lat": lat,
+                "lon": lon,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return {}
+
+        data = resp.json()
+        outputs = data.get("outputs", {})
+
+        residential_rate = outputs.get("residential", 0)
+        commercial_rate = outputs.get("commercial", 0)
+        utility_name = outputs.get("utility_name", "")
+
+        result = {
+            "residential_rate": residential_rate,  # $/kWh
+            "commercial_rate":  commercial_rate,
+            "utility_name":     utility_name,
+            "rate_tier": (
+                "🔴 MUY ALTA" if residential_rate > 0.30 else
+                "🟠 ALTA" if residential_rate > 0.20 else
+                "🟡 MEDIA" if residential_rate > 0.12 else
+                "🟢 BAJA"
+            ),
+        }
+        _utility_rate_cache[cache_key] = result
+        return result
+
+    except Exception as e:
+        logger.debug(f"[OpenEI] Error: {e}")
+        return {}
+
+
 # ── Fetchers ─────────────────────────────────────────────────────────
 
 def _fetch_socrata(source: dict) -> list:
@@ -350,8 +550,9 @@ class SolarAgent(BaseAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._contacts = load_all_contacts()
-        # Cache NREL para evitar llamadas repetidas por ciudad
+        # Caches para evitar llamadas repetidas por ciudad
         self._nrel_cache: dict = {}
+        self._utility_cache: dict = {}
 
     def _get_nrel_for_city(self, city: str) -> dict | None:
         """NREL lookup con cache por ciudad."""
@@ -362,6 +563,17 @@ class SolarAgent(BaseAgent):
             return None
         result = _get_solar_potential(coords[0], coords[1])
         self._nrel_cache[city] = result
+        return result
+
+    def _get_utility_rate_for_city(self, city: str) -> dict:
+        """Utility rate lookup con cache por ciudad."""
+        if city in self._utility_cache:
+            return self._utility_cache[city]
+        coords = _CITY_COORDS.get(city)
+        if not coords:
+            return {}
+        result = _get_utility_rate(coords[0], coords[1])
+        self._utility_cache[city] = result
         return result
 
     def fetch_leads(self) -> list:
@@ -413,6 +625,34 @@ class SolarAgent(BaseAgent):
                             lead["solar_potential"] = nrel.get("solar_rating", "")
                             lead["ghi_annual"]      = nrel.get("ghi_annual", 0)
 
+                        # ── Google Solar API: potencial a nivel edificio ─
+                        coords = _CITY_COORDS.get(city)
+                        if GOOGLE_SOLAR_KEY and coords:
+                            gsolar = _google_solar_lookup(coords[0], coords[1])
+                            if gsolar:
+                                lead["max_panels"]    = gsolar.get("max_panels", 0)
+                                lead["annual_kwh"]    = gsolar.get("annual_kwh", 0)
+                                lead["roof_sqft"]     = gsolar.get("roof_sqft", 0)
+                                lead["carbon_offset"] = gsolar.get("carbon_offset_kg", 0)
+
+                        # ── OpenEI: tarifa eléctrica de la zona ─────────
+                        if coords:
+                            rate_info = self._get_utility_rate_for_city(city)
+                            if rate_info:
+                                lead["utility_rate"]  = rate_info.get("residential_rate", 0)
+                                lead["rate_tier"]     = rate_info.get("rate_tier", "")
+                                lead["utility_name"]  = rate_info.get("utility_name", "")
+                                # Estimar ahorro anual si hay kWh y tarifa
+                                if lead.get("annual_kwh") and lead["utility_rate"]:
+                                    lead["annual_savings"] = round(
+                                        lead["annual_kwh"] * lead["utility_rate"], 0
+                                    )
+
+                        # Lead scoring
+                        lead["_agent_key"] = "solar"
+                        scoring = score_lead(lead)
+                        lead["_scoring"] = scoring
+
                         leads.append(lead)
 
                     logger.info(f"[Solar/{city}] {len(records)} permisos solares")
@@ -420,14 +660,94 @@ class SolarAgent(BaseAgent):
                 except Exception as e:
                     logger.error(f"[Solar/{src['city']}] Error: {e}")
 
-        # Ordenar por valor (mayor primero) para priorizar leads valiosos
-        leads.sort(key=lambda l: l.get("value_float", 0), reverse=True)
+        # ── Aurora Solar: proyectos activos de diseño (pago) ─────
+        if AURORA_API_KEY:
+            for city_name in ["San Francisco", "Oakland", "San Jose"]:
+                try:
+                    projects = _fetch_aurora_projects(city_name)
+                    for proj in projects:
+                        lead = {
+                            "id":          f"aurora_{proj.get('id', '')}",
+                            "city":        city_name,
+                            "address":     proj.get("address", ""),
+                            "description": f"Proyecto solar Aurora — {proj.get('status', '')}",
+                            "status":      proj.get("status", ""),
+                            "date":        (proj.get("created_at") or "")[:10],
+                            "contractor":  proj.get("installer_name", ""),
+                            "owner":       proj.get("customer_name", ""),
+                            "value_float": float(proj.get("system_cost", 0) or 0),
+                            "annual_kwh":  float(proj.get("annual_production_kwh", 0) or 0),
+                            "system_size_kw": float(proj.get("system_size_kw", 0) or 0),
+                            "source":      "Aurora Solar",
+                            "_agent_key":  "solar",
+                        }
+                        if proj.get("customer_email"):
+                            lead["contact_email"]  = proj["customer_email"]
+                            lead["contact_source"] = "Aurora Solar"
+
+                        scoring = score_lead(lead)
+                        scoring["reasons"].insert(0, "🔥 Proyecto solar activo en Aurora")
+                        scoring["score"] = min(scoring["score"] + 15, 100)
+                        lead["_scoring"] = scoring
+                        leads.append(lead)
+
+                    if projects:
+                        logger.info(f"[Aurora/{city_name}] {len(projects)} proyectos")
+                except Exception as e:
+                    logger.debug(f"[Aurora/{city_name}] {e}")
+
+        # ── EnergySage: compradores activos (pago) ──────────────
+        if ENERGYSAGE_KEY:
+            bay_area_zips = ["94102", "94607", "95112", "94538", "94704",
+                             "94087", "94805", "94025", "94014"]
+            for zip_code in bay_area_zips:
+                try:
+                    es_leads = _fetch_energysage_leads(zip_code)
+                    for es in es_leads:
+                        lead = {
+                            "id":          f"energysage_{es.get('id', '')}",
+                            "city":        es.get("city", zip_code),
+                            "address":     es.get("address", "") or f"ZIP {zip_code}",
+                            "description": "Comprador activo buscando cotización solar",
+                            "status":      "Buscando cotización",
+                            "date":        (es.get("created_at") or "")[:10],
+                            "owner":       es.get("name", ""),
+                            "value_float": float(es.get("estimated_system_cost", 0) or 0),
+                            "system_size_kw": float(es.get("system_size_kw", 0) or 0),
+                            "source":      "EnergySage",
+                            "_agent_key":  "solar",
+                        }
+                        if es.get("email"):
+                            lead["contact_email"]  = es["email"]
+                            lead["contact_source"] = "EnergySage"
+                        if es.get("phone"):
+                            lead["contact_phone"]  = es["phone"]
+                            lead["contact_source"] = "EnergySage"
+
+                        scoring = score_lead(lead)
+                        scoring["reasons"].insert(0, "🎯 Comprador activo en EnergySage")
+                        scoring["score"] = min(scoring["score"] + 20, 100)
+                        lead["_scoring"] = scoring
+                        leads.append(lead)
+
+                    if es_leads:
+                        logger.info(f"[EnergySage/{zip_code}] {len(es_leads)} compradores")
+                except Exception as e:
+                    logger.debug(f"[EnergySage/{zip_code}] {e}")
+
+        # Ordenar por score, luego por valor
+        leads.sort(key=lambda l: (
+            -l.get("_scoring", {}).get("score", 0),
+            -l.get("value_float", 0),
+        ))
         return leads
 
     def notify(self, lead: dict):
-        phone  = lead.get("contact_phone") or "No disponible"
-        source = lead.get("contact_source", "")
-        value  = lead.get("value_float", 0)
+        scoring    = lead.get("_scoring", {})
+        score_line = format_score_line(scoring) if scoring else ""
+        phone      = lead.get("contact_phone") or "No disponible"
+        source     = lead.get("contact_source", "")
+        value      = lead.get("value_float", 0)
 
         fields = {
             "📍 Ciudad":           lead.get("city"),
@@ -441,11 +761,41 @@ class SolarAgent(BaseAgent):
             "💰 Valor":            f"${value:,.0f}" if value else "—",
         }
 
-        # Agregar potencial solar si disponible (NREL)
+        # Potencial solar (NREL)
         solar_pot = lead.get("solar_potential")
         if solar_pot:
             ghi = lead.get("ghi_annual", 0)
             fields["☀️ Potencial Solar"] = f"{solar_pot} (GHI: {ghi:.1f} kWh/m²/día)"
+
+        # Google Solar API — datos de edificio
+        if lead.get("max_panels"):
+            fields["🔋 Capacidad Techo"] = (
+                f"{lead['max_panels']} paneles / {lead.get('roof_sqft', 0):,.0f} sqft"
+            )
+        if lead.get("annual_kwh"):
+            fields["⚡ Producción Anual"] = f"{lead['annual_kwh']:,.0f} kWh"
+        if lead.get("carbon_offset"):
+            fields["🌍 CO₂ Offset"] = f"{lead['carbon_offset']:,.0f} kg/año"
+
+        # Tarifa eléctrica (OpenEI)
+        if lead.get("rate_tier"):
+            rate = lead.get("utility_rate", 0)
+            fields["💡 Tarifa Eléctrica"] = f"{lead['rate_tier']} (${rate:.3f}/kWh)"
+        if lead.get("annual_savings"):
+            fields["💰 Ahorro Estimado"] = f"${lead['annual_savings']:,.0f}/año"
+        if lead.get("utility_name"):
+            fields["🏢 Utility"] = lead["utility_name"]
+
+        # Sistema solar (Aurora/EnergySage)
+        if lead.get("system_size_kw"):
+            fields["🔌 Sistema"] = f"{lead['system_size_kw']:.1f} kW"
+
+        # Fuente especial
+        if lead.get("source") in ("Aurora Solar", "EnergySage"):
+            fields["📡 Fuente"] = f"🎯 {lead['source']}"
+
+        if score_line:
+            fields["🎯 Lead Score"] = score_line
 
         send_lead(
             agent_name=self.name, emoji=self.emoji,
@@ -453,3 +803,7 @@ class SolarAgent(BaseAgent):
             fields=fields,
             cta="☀️ Solar nuevo = oportunidad de mejorar aislamiento. ¡Contáctalos!",
         )
+
+        # Multi-canal para leads calientes
+        if scoring.get("score", 0) >= 70:
+            notify_multichannel(lead, scoring)
