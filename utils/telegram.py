@@ -72,6 +72,21 @@ def send_message(text: str, max_retries: int = 4) -> bool:
                 time.sleep(retry_after + 2)
                 _wait_for_slot()
                 continue
+            if resp.status_code == 400:
+                # Markdown roto — reintentar sin parse_mode
+                resp2 = requests.post(
+                    url,
+                    json={
+                        "chat_id":                  _chat_id(),
+                        "text":                     text[:4096],
+                        "disable_web_page_preview": True,
+                    },
+                    timeout=15,
+                )
+                if resp2.status_code == 200:
+                    return True
+                logger.error(f"Telegram 400 even without Markdown: {resp2.text[:200]}")
+                return False
             resp.raise_for_status()
             return True
         except requests.exceptions.HTTPError as e:
@@ -111,8 +126,8 @@ def send_digest(agent_name: str, emoji: str, leads: list) -> bool:
     email, valor y enlace. Páginas de 15 leads.
     """
     total      = len(leads)
-    page_size  = 15
-    pages      = [leads[i:i+page_size] for i in range(0, min(total, 120), page_size)]
+    page_size  = 5
+    pages      = [leads[i:i+page_size] for i in range(0, min(total, 200), page_size)]
     label      = agent_name.upper().replace(emoji, "").strip()
     timestamp  = datetime.now().strftime("%d/%m/%Y %H:%M")
     ok         = True
