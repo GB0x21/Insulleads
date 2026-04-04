@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 SOURCE_TIMEOUT     = int(os.getenv("SOURCE_TIMEOUT", "45"))
 DECON_MONTHS       = int(os.getenv("DECON_MONTHS", "3"))
 PARALLEL_DECON     = int(os.getenv("PARALLEL_DECON", "6"))
+MIN_DECON_VALUE    = float(os.getenv("MIN_DECON_VALUE", "50000"))
 ATTOM_API_KEY      = os.getenv("ATTOM_API_KEY", "")
 
 
@@ -688,6 +689,10 @@ class DeconstuctionAgent(BaseAgent):
                             addr = f"{addr} {raw[fm['address2']]}".strip()
 
                         value = _parse_value(get(raw, "value"))
+
+                        # Filtrar por valor mínimo
+                        if value < MIN_DECON_VALUE:
+                            continue
 
                         lead = {
                             "id":            f"{city}_decon_{get(raw, 'id')}",
