@@ -32,10 +32,17 @@ def init_web_db():
             password_hash TEXT NOT NULL,
             full_name TEXT,
             is_active BOOLEAN DEFAULT 1,
+            expires_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Migration: add expires_at column if table already exists without it
+    try:
+        c.execute("SELECT expires_at FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE users ADD COLUMN expires_at TIMESTAMP")
 
     # ─────────────────────────────────────────────────────
     # Roles & Permissions
