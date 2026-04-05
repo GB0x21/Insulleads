@@ -1,8 +1,10 @@
-# Insul-Techs Lead Agents
+# Insulleads
 
-Sistema automatizado de generacion de leads para **Insul-Techs, Inc.** — contratistas de insulacion en el Bay Area.
+Sistema automatizado de generacion de leads para contratistas de insulacion en el Bay Area.
 
 Monitorea **54 ciudades** en **9 condados** del Bay Area usando APIs publicas y de pago, detecta oportunidades de insulacion, y envia alertas en tiempo real a Telegram con datos de contacto del GC.
+
+Incluye **dashboard multi-usuario** con control de acceso por ciudad/agente, acceso temporal por tiempo, y soporte para 50+ usuarios simultaneos.
 
 ---
 
@@ -80,6 +82,182 @@ Score automatico basado en: valor del proyecto, tipo de proyecto, calidad de con
 
 ---
 
+## Dashboard Multi-Usuario
+
+Dashboard web con RBAC (Role-Based Access Control) para gestionar leads con multiples usuarios.
+
+### Caracteristicas
+
+- **50+ usuarios** simultaneos con roles diferenciados
+- **4 roles predefinidos:** admin, manager, user, viewer
+- **Control por ciudad** — cada usuario ve solo las ciudades asignadas
+- **Control por agente** — cada usuario ve solo los tipos de lead asignados
+- **Acceso temporal** — dar acceso por horas/dias con expiracion automatica
+- **JWT authentication** con tokens de acceso y refresh
+- **Audit logging** — seguimiento de toda la actividad
+- **Dashboard responsive** — funciona en desktop y movil
+
+### Quick Start
+
+```bash
+# Instalar dependencias web
+pip install -r requirements.txt
+
+# Iniciar servidor web
+python web_server.py
+
+# Abrir en navegador
+# http://localhost:5000/login.html
+# Credenciales: admin / admin123
+
+# (Opcional) Crear usuarios demo
+python web/init_demo_users.py
+```
+
+### Roles y Permisos
+
+| Rol | Permisos |
+|-----|----------|
+| **admin** | Acceso total + gestion de usuarios y roles |
+| **manager** | Ver todos los leads, gestionar equipo |
+| **user** | Ver leads asignados, registrar contactos |
+| **viewer** | Solo lectura de leads asignados |
+
+### Acceso Temporal (por tiempo)
+
+Dar acceso a un usuario por tiempo limitado (ej: 24 horas, 1 semana):
+
+```bash
+# Crear usuario con acceso de 24 horas
+curl -X POST http://localhost:5000/api/admin/users \
+  -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "temp_user",
+    "email": "temp@example.com",
+    "password": "pass123",
+    "roles": ["user"],
+    "expires_in_hours": 24,
+    "city_ids": [44],
+    "agent_ids": [10]
+  }'
+
+# Extender acceso 48 horas mas
+curl -X PUT http://localhost:5000/api/admin/users/5/expiration \
+  -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"expires_in_hours": 48}'
+
+# Poner fecha exacta de expiracion
+curl -X PUT http://localhost:5000/api/admin/users/5/expiration \
+  -d '{"expires_at": "2026-04-10 00:00:00"}'
+
+# Hacer acceso permanente (quitar expiracion)
+curl -X PUT http://localhost:5000/api/admin/users/5/expiration \
+  -d '{"permanent": true}'
+```
+
+Cuando el acceso expira, el usuario recibe un error 403 con mensaje claro y debe contactar al administrador.
+
+### Control de Acceso por Ciudad/Agente
+
+Ejemplo: Usuario X solo ve leads de **San Francisco** + **Demolicion**:
+
+```bash
+curl -X POST http://localhost:5000/api/admin/users \
+  -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "user_x",
+    "email": "x@example.com",
+    "password": "pass123",
+    "roles": ["user"],
+    "city_ids": [44],
+    "agent_ids": [10]
+  }'
+```
+
+Ejemplo: Usuario Y solo ve leads de **Concord** + **Roedores y Solar**:
+
+```bash
+curl -X POST http://localhost:5000/api/admin/users \
+  -d '{
+    "username": "user_y",
+    "roles": ["user"],
+    "city_ids": [9],
+    "agent_ids": [2, 3]
+  }'
+```
+
+Dejar `city_ids` o `agent_ids` vacios = acceso a todas las ciudades/agentes.
+
+### API Endpoints
+
+**Autenticacion:**
+```
+POST   /api/auth/login              Login (username + password)
+POST   /api/auth/refresh            Renovar token de acceso
+POST   /api/auth/logout             Logout y revocar token
+```
+
+**Leads:**
+```
+GET    /api/leads                   Listar leads (filtros: city, agent, score, value, status)
+GET    /api/leads/<id>              Detalle de un lead
+POST   /api/leads/<id>/contact      Registrar contacto con lead
+```
+
+**Dashboard:**
+```
+GET    /api/user                    Info del usuario actual + permisos
+GET    /api/stats                   Estadisticas del dashboard
+GET    /api/audit-log               Log de actividad
+GET    /api/health                  Health check
+```
+
+**Admin (solo admin):**
+```
+POST   /api/admin/users             Crear usuario (con acceso temporal opcional)
+PUT    /api/admin/users/<id>/access      Actualizar ciudades/agentes
+PUT    /api/admin/users/<id>/expiration  Extender/revocar acceso temporal
+```
+
+### Produccion
+
+```bash
+# Con gunicorn (recomendado para produccion)
+gunicorn -w 4 -b 0.0.0.0:5000 web_server:app
+
+# Como servicio systemd
+sudo nano /etc/systemd/system/insulleads-web.service
+```
+
+```ini
+[Unit]
+Description=Insulleads Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=insulleads
+WorkingDirectory=/home/insulleads/Insulleads
+Environment="JWT_SECRET_KEY=tu-clave-secreta-aqui"
+ExecStart=/home/insulleads/Insulleads/venv/bin/gunicorn -w 4 -b 0.0.0.0:5000 web_server:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable insulleads-web
+sudo systemctl start insulleads-web
+```
+
+> Para documentacion completa del dashboard, ver [DASHBOARD.md](DASHBOARD.md), [INTEGRATION.md](INTEGRATION.md), y [QUICKSTART.md](QUICKSTART.md).
+
+---
+
 ## Instalacion desde Cero en DigitalOcean Droplet
 
 ### Paso 1: Crear el Droplet
@@ -139,6 +317,14 @@ nano .env
 ```
 TELEGRAM_BOT_TOKEN=123456789:ABCdef...
 TELEGRAM_CHAT_ID=-1001234567890
+```
+
+**Dashboard web** (opcional pero recomendado):
+```
+JWT_SECRET_KEY=tu-clave-secreta-larga-y-aleatoria
+JWT_ACCESS_EXPIRY=3600
+JWT_REFRESH_EXPIRY=604800
+PORT=5000
 ```
 
 Para obtener estos valores:
@@ -225,7 +411,7 @@ sudo nano /etc/systemd/system/insulleads.service
 Pega este contenido:
 ```ini
 [Unit]
-Description=Insul-Techs Lead Generation Agents
+Description=Insulleads Lead Generation Agents
 After=network.target
 
 [Service]
@@ -246,17 +432,45 @@ EnvironmentFile=/home/insulleads/Insulleads/.env
 WantedBy=multi-user.target
 ```
 
-Activar:
+Crear tambien el servicio web:
+```bash
+sudo nano /etc/systemd/system/insulleads-web.service
+```
+
+```ini
+[Unit]
+Description=Insulleads Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=insulleads
+Group=insulleads
+WorkingDirectory=/home/insulleads/Insulleads
+Environment="JWT_SECRET_KEY=cambia-esto-en-produccion"
+ExecStart=/home/insulleads/Insulleads/venv/bin/gunicorn -w 4 -b 0.0.0.0:5000 web_server:app
+Restart=always
+RestartSec=10
+
+EnvironmentFile=/home/insulleads/Insulleads/.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Activar ambos servicios:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable insulleads
-sudo systemctl start insulleads
+sudo systemctl enable insulleads insulleads-web
+sudo systemctl start insulleads insulleads-web
 
-# Verificar que esta corriendo
+# Verificar que estan corriendo
 sudo systemctl status insulleads
+sudo systemctl status insulleads-web
 
 # Ver logs en tiempo real
 sudo journalctl -u insulleads -f
+sudo journalctl -u insulleads-web -f
 ```
 
 #### Opcion B: Docker
@@ -291,6 +505,7 @@ pm2 startup
 
 ## Comandos
 
+### Agentes de Leads
 ```bash
 python main.py                    # Inicia todos los agentes
 python main.py --test             # Prueba conexion Telegram
@@ -305,6 +520,15 @@ python main.py --run energy       # Ejecuta solo eficiencia energetica
 python main.py --run places       # Ejecuta solo Google Places
 python main.py --run yelp         # Ejecuta solo Yelp
 python main.py --stats            # Estadisticas de leads enviados
+```
+
+### Dashboard Web
+```bash
+python web_server.py              # Inicia dashboard (puerto 5000)
+python web/init_demo_users.py     # Crear usuarios demo (5 usuarios)
+
+# Produccion
+gunicorn -w 4 -b 0.0.0.0:5000 web_server:app
 ```
 
 ### Habilitar/Deshabilitar Agentes
@@ -330,9 +554,13 @@ AGENT_YELP=false       # Requiere Yelp API key
 ```
 Insulleads/
 ├── main.py                         # Orquestador — 10 agentes, paralelo
-├── requirements.txt                # requests, python-dotenv, schedule, bs4
+├── web_server.py                   # Servidor web Flask (dashboard)
+├── requirements.txt                # requests, Flask, PyJWT, bcrypt, etc.
 ├── .env.example                    # Todas las variables documentadas
 ├── Dockerfile                      # Deploy con Docker
+├── DASHBOARD.md                    # Documentacion completa del dashboard
+├── INTEGRATION.md                  # Integracion agents + dashboard
+├── QUICKSTART.md                   # Guia rapida del dashboard
 │
 ├── agents/
 │   ├── base.py                     # BaseAgent v5 — dedup + hot zones
@@ -347,8 +575,17 @@ Insulleads/
 │   ├── places_agent.py             # Google Places API
 │   └── yelp_agent.py               # Yelp Fusion API
 │
+├── web/                            # Dashboard multi-usuario
+│   ├── app.py                      # Flask API — 15+ endpoints con RBAC
+│   ├── auth.py                     # JWT + bcrypt + acceso temporal
+│   ├── init_demo_users.py          # Script para crear usuarios demo
+│   └── templates/
+│       ├── index.html              # Dashboard principal (responsive)
+│       └── login.html              # Pagina de login
+│
 ├── utils/
 │   ├── db.py                       # SQLite — dedup de leads enviados
+│   ├── web_db.py                   # Schema multi-usuario (12 tablas)
 │   ├── telegram.py                 # Rate-limited Telegram sender
 │   ├── contacts_loader.py          # 50K+ contactos CSV, fuzzy matching
 │   ├── lead_scoring.py             # Score 0-100 con 7 factores
@@ -365,7 +602,7 @@ Insulleads/
 │   └── ... (24 archivos CSV)
 │
 └── data/
-    └── leads.db                    # Auto-creada — nunca repite leads
+    └── leads.db                    # Auto-creada — leads + usuarios + permisos
 ```
 
 ---
@@ -412,7 +649,7 @@ pm2 logs insulleads
 ```bash
 cd /home/insulleads/Insulleads
 git pull origin main
-sudo systemctl restart insulleads
+sudo systemctl restart insulleads insulleads-web
 ```
 
 ### Backup de la base de datos
@@ -461,3 +698,15 @@ Solo copia el archivo a `contacts/` y reinicia. Se carga automaticamente.
 
 **Funciona sin las APIs de pago?**
 Si. El sistema funciona 100% con APIs gratuitas. Las de pago solo enriquecen los datos.
+
+**Como doy acceso temporal a un usuario?**
+Al crear el usuario, agrega `"expires_in_hours": 24` para acceso de 24 horas. Tambien puedes extender con `PUT /api/admin/users/<id>/expiration`.
+
+**Cuantos usuarios soporta el dashboard?**
+50+ usuarios simultaneos con SQLite. Para 100+, se recomienda migrar a PostgreSQL.
+
+**El dashboard y los agentes pueden correr al mismo tiempo?**
+Si. Ambos comparten la misma base de datos SQLite sin conflictos. Los agentes escriben leads, el dashboard los lee.
+
+**Como restrinjo un usuario a solo ciertas ciudades?**
+Al crear el usuario, pasa `city_ids` con los IDs de las ciudades permitidas. Dejar vacio = acceso a todas.
