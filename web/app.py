@@ -10,7 +10,7 @@ REST API endpoints for:
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
@@ -171,7 +171,7 @@ def get_current_user():
     c = conn.cursor()
 
     c.execute("""
-        SELECT u.id, u.username, u.email, u.full_name, u.created_at
+        SELECT u.id, u.username, u.email, u.full_name, u.expires_at, u.created_at
         FROM users u WHERE u.id = ?
     """, (user_id,))
     user = dict(c.fetchone())
@@ -559,9 +559,20 @@ def create_user():
     roles = data.get('roles', ['user'])
     city_ids = data.get('city_ids', [])
     agent_ids = data.get('agent_ids', [])
+    # Time-limited access: accepts hours (e.g. 24) or ISO datetime string
+    expires_in_hours = data.get('expires_in_hours')
+    expires_at = data.get('expires_at')  # ISO format: "2026-04-06 15:00:00"
 
     if not username or not email or not password:
         return jsonify({"error": "Missing required fields"}), 400
+
+    # Calculate expiration timestamp
+    expiration = None
+    if expires_in_hours:
+        from datetime import timedelta
+        expiration = (datetime.utcnow() + timedelta(hours=int(expires_in_hours))).strftime("%Y-%m-%d %H:%M:%S")
+    elif expires_at:
+        expiration = expires_at
 
     password_hash = hash_password(password)
 
@@ -570,9 +581,9 @@ def create_user():
 
     try:
         c.execute("""
-            INSERT INTO users (username, email, password_hash, full_name)
-            VALUES (?, ?, ?, ?)
-        """, (username, email, password_hash, full_name))
+            INSERT INTO users (username, email, password_hash, full_name, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (username, email, password_hash, full_name, expiration))
 
         user_id = c.lastrowid
 
@@ -603,15 +614,79 @@ def create_user():
         conn.commit()
         conn.close()
 
-        return jsonify({
+        result = {
             "id": user_id,
             "username": username,
             "email": email
-        }), 201
+        }
+        if expiration:
+            result["expires_at"] = expiration
+            result["access_type"] = "temporary"
+        else:
+            result["access_type"] = "permanent"
+
+        return jsonify(result), 201
 
     except Exception as e:
         conn.close()
         return jsonify({"error": str(e)}), 400
+
+
+@app.route('/api/admin/users/<int:user_id>/expiration', methods=['PUT'])
+@require_admin
+def update_user_expiration(user_id):
+    """Update user's access expiration (admin only).
+
+    Set expires_in_hours to extend from now, expires_at for exact date,
+    or set both to null/omit to make access permanent.
+    """
+    data = request.get_json() or {}
+    expires_in_hours = data.get('expires_in_hours')
+    expires_at = data.get('expires_at')
+    remove_expiration = data.get('permanent', False)
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Verify user exists
+    c.execute("SELECT id, username FROM users WHERE id = ?", (user_id,))
+    user = c.fetchone()
+    if not user:
+        conn.close()
+        return jsonify({"error": "User not found"}), 404
+
+    if remove_expiration:
+        # Make access permanent
+        c.execute("UPDATE users SET expires_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({
+            "user_id": user_id,
+            "username": user["username"],
+            "expires_at": None,
+            "access_type": "permanent"
+        }), 200
+
+    # Calculate new expiration
+    expiration = None
+    if expires_in_hours:
+        expiration = (datetime.utcnow() + timedelta(hours=int(expires_in_hours))).strftime("%Y-%m-%d %H:%M:%S")
+    elif expires_at:
+        expiration = expires_at
+    else:
+        conn.close()
+        return jsonify({"error": "Provide expires_in_hours, expires_at, or permanent=true"}), 400
+
+    c.execute("UPDATE users SET expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (expiration, user_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "user_id": user_id,
+        "username": user["username"],
+        "expires_at": expiration,
+        "access_type": "temporary"
+    }), 200
 
 
 @app.route('/api/admin/users/<int:user_id>/access', methods=['PUT'])

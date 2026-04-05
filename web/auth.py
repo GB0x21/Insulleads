@@ -116,8 +116,19 @@ def require_auth(f):
             if not user:
                 return jsonify({"error": "User not found or inactive"}), 401
 
+            # Check if user access has expired
+            user_dict = dict(user)
+            if user_dict.get("expires_at"):
+                expires_at = datetime.strptime(user_dict["expires_at"], "%Y-%m-%d %H:%M:%S")
+                if datetime.utcnow() > expires_at:
+                    return jsonify({
+                        "error": "Access expired",
+                        "expired_at": user_dict["expires_at"],
+                        "message": "Your access has expired. Contact your administrator."
+                    }), 403
+
             # Store user in Flask g object for request context
-            g.user = dict(user)
+            g.user = user_dict
             g.user_id = user["id"]
 
         except AuthError as e:
