@@ -166,7 +166,9 @@ class DeduplicationEngine:
         other_signals = self._get_signals(addr_key, exclude_agent=agent_key)
 
         if not other_signals:
-            return lead  # No hay cross-match, retornar original
+            # No hay cross-match, pero persiste el lead en consolidated_leads
+            self._persist_consolidated(addr_key, lead, [agent_key])
+            return lead  # Retornar original
 
         # ── Consolidar: fusionar datos de todos los agentes ──────
         consolidated = dict(lead)  # Copiar lead original
@@ -222,7 +224,36 @@ class DeduplicationEngine:
             f"{len(unique_agents)} agentes: {', '.join(unique_agents)}"
         )
 
+        # Persistir lead consolidado en DB
+        self._persist_consolidated(addr_key, consolidated, unique_agents)
+
         return consolidated
+
+    def _persist_consolidated(self, addr_key: str, lead: dict, agents: list):
+        """Persiste lead consolidado en la tabla consolidated_leads."""
+        import json
+        try:
+            with self._get_conn() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO consolidated_leads
+                    (address_key, address, city, agent_sources, first_seen, last_updated, lead_data, notified)
+                    VALUES (?, ?, ?, ?, COALESCE(
+                        (SELECT first_seen FROM consolidated_leads WHERE address_key = ?),
+                        ?
+                    ), ?, ?, 0)
+                """, (
+                    addr_key,
+                    lead.get("address", ""),
+                    lead.get("city", ""),
+                    ",".join(agents),
+                    addr_key,
+                    datetime.utcnow().isoformat(),
+                    datetime.utcnow().isoformat(),
+                    json.dumps(lead, default=str),
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"[Dedup] Persist consolidated error: {e}")
 
     def _record_signal(self, address_key: str, agent_key: str, lead: dict):
         """Registra una señal de un agente para una propiedad."""
