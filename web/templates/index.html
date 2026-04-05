@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Insulleads Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+        }
+
+        .navbar {
+            background: white;
+            border-bottom: 1px solid #e1e8ed;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .navbar h1 {
+            font-size: 1.5rem;
+            color: #1f2937;
+        }
+
+        .navbar-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-info {
+            text-align: right;
+            font-size: 0.9rem;
+        }
+
+        .user-info p {
+            color: #6b7280;
+        }
+
+        .logout-btn {
+            padding: 0.5rem 1rem;
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .logout-btn:hover {
+            background: #dc2626;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            border-left: 4px solid #3b82f6;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #1f2937;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .filters {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .filters h3 {
+            margin-bottom: 1rem;
+            color: #1f2937;
+        }
+
+        .filter-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .filter-group label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: #374151;
+        }
+
+        .filter-group select,
+        .filter-group input {
+            padding: 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+            font-size: 0.9rem;
+        }
+
+        .filter-group input:focus,
+        .filter-group select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+
+        .btn-secondary {
+            background: #e5e7eb;
+            color: #1f2937;
+        }
+
+        .btn-secondary:hover {
+            background: #d1d5db;
+        }
+
+        .leads-table {
+            background: white;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead {
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        th {
+            padding: 1rem;
+            text-align: left;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #374151;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        tbody tr:hover {
+            background: #f9fafb;
+        }
+
+        .score-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: white;
+        }
+
+        .score-hot {
+            background: #ef4444;
+        }
+
+        .score-warm {
+            background: #f97316;
+        }
+
+        .score-medium {
+            background: #eab308;
+            color: #333;
+        }
+
+        .score-cool {
+            background: #06b6d4;
+        }
+
+        .score-cold {
+            background: #6b7280;
+        }
+
+        .lead-address {
+            font-weight: 500;
+            color: #1f2937;
+            cursor: pointer;
+        }
+
+        .lead-address:hover {
+            color: #3b82f6;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-top: 2rem;
+        }
+
+        .pagination button {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #d1d5db;
+            background: white;
+            cursor: pointer;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+        }
+
+        .pagination button.active {
+            background: #3b82f6;
+            color: white;
+            border-color: #3b82f6;
+        }
+
+        .pagination button:hover:not(.active) {
+            background: #f3f4f6;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.4);
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            max-width: 600px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-header h2 {
+            color: #1f2937;
+        }
+
+        .close-btn {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #6b7280;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+        }
+
+        .close-btn:hover {
+            color: #1f2937;
+        }
+
+        .modal-field {
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-field label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: #374151;
+        }
+
+        .modal-field p {
+            color: #4b5563;
+            line-height: 1.6;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #6b7280;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #ef4444;
+        }
+
+        .success {
+            background: #dcfce7;
+            color: #166534;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #22c55e;
+        }
+
+        @media (max-width: 768px) {
+            .navbar {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .filter-row {
+                grid-template-columns: 1fr;
+            }
+
+            table {
+                font-size: 0.875rem;
+            }
+
+            th, td {
+                padding: 0.75rem 0.5rem;
+            }
+
+            .modal-content {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>📊 Insulleads Dashboard</h1>
+        <div class="navbar-right">
+            <div class="user-info">
+                <p id="username">Loading...</p>
+            </div>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Stats -->
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-total">-</div>
+                <div class="stat-label">Total Leads</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-new">-</div>
+                <div class="stat-label">New Leads</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-contacted">-</div>
+                <div class="stat-label">Contacted</div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+            <h3>Filters</h3>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label for="filter-city">City</label>
+                    <select id="filter-city" onchange="loadLeads()">
+                        <option value="">All Cities</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filter-agent">Agent</label>
+                    <select id="filter-agent" onchange="loadLeads()">
+                        <option value="">All Agents</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filter-status">Status</label>
+                    <select id="filter-status" onchange="loadLeads()">
+                        <option value="all">All</option>
+                        <option value="new">New</option>
+                        <option value="contacted">Contacted</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filter-score">Min Score</label>
+                    <input type="number" id="filter-score" min="0" max="100" placeholder="0-100" onchange="loadLeads()">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-value">Min Value</label>
+                    <input type="number" id="filter-value" min="0" placeholder="$0" onchange="loadLeads()">
+                </div>
+                <div class="button-group" style="align-self: flex-end;">
+                    <button class="btn btn-primary" onclick="loadLeads()">Search</button>
+                    <button class="btn btn-secondary" onclick="resetFilters()">Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leads Table -->
+        <div class="leads-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 40%;">Address</th>
+                        <th style="width: 15%;">City</th>
+                        <th style="width: 10%;">Score</th>
+                        <th style="width: 15%;">Source</th>
+                        <th style="width: 20%;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="leads-tbody">
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 2rem;">
+                            <div class="loading">Loading leads...</div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" id="pagination"></div>
+    </div>
+
+    <!-- Lead Detail Modal -->
+    <div class="modal" id="lead-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Lead Details</h2>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <div id="modal-body"></div>
+            <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
+                <button class="btn btn-primary" onclick="logContact()">Log Contact</button>
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPage = 1;
+        let currentLead = null;
+
+        // Initialize
+        async function init() {
+            try {
+                const user = await fetch('/api/user', {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
+                }).then(r => r.json());
+
+                if (user.error) {
+                    window.location.href = '/login.html';
+                    return;
+                }
+
+                document.getElementById('username').textContent = user.username;
+
+                // Populate city filter
+                const citySelect = document.getElementById('filter-city');
+                user.cities.forEach(city => {
+                    const option = document.createElement('option');
+                    option.value = city.id;
+                    option.textContent = city.name;
+                    citySelect.appendChild(option);
+                });
+
+                // Populate agent filter
+                const agentSelect = document.getElementById('filter-agent');
+                user.agents.forEach(agent => {
+                    const option = document.createElement('option');
+                    option.value = agent.name;
+                    option.textContent = agent.name;
+                    agentSelect.appendChild(option);
+                });
+
+                // Load initial data
+                await Promise.all([loadLeads(), loadStats()]);
+            } catch (e) {
+                console.error('Init error:', e);
+            }
+        }
+
+        async function loadLeads() {
+            const city = document.getElementById('filter-city').value;
+            const agent = document.getElementById('filter-agent').value;
+            const status = document.getElementById('filter-status').value;
+            const minScore = document.getElementById('filter-score').value;
+            const minValue = document.getElementById('filter-value').value;
+
+            let url = `/api/leads?page=${currentPage}`;
+            if (city) url += `&city_id=${city}`;
+            if (agent) url += `&agent=${agent}`;
+            if (status !== 'all') url += `&status=${status}`;
+            if (minScore) url += `&min_score=${minScore}`;
+            if (minValue) url += `&min_value=${minValue}`;
+
+            try {
+                const data = await fetch(url, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
+                }).then(r => r.json());
+
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                renderLeads(data.leads);
+                renderPagination(data.pages, currentPage);
+            } catch (e) {
+                showError('Failed to load leads');
+            }
+        }
+
+        function renderLeads(leads) {
+            const tbody = document.getElementById('leads-tbody');
+
+            if (leads.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem;">No leads found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = leads.map(lead => {
+                const score = lead.score || 0;
+                let scoreClass = 'score-cold';
+                if (score >= 80) scoreClass = 'score-hot';
+                else if (score >= 60) scoreClass = 'score-warm';
+                else if (score >= 40) scoreClass = 'score-medium';
+                else if (score >= 20) scoreClass = 'score-cool';
+
+                return `
+                    <tr>
+                        <td><span class="lead-address" onclick="viewLead('${lead.id}')">${lead.address || 'N/A'}</span></td>
+                        <td>${lead.city || '-'}</td>
+                        <td><span class="score-badge ${scoreClass}">${score}</span></td>
+                        <td>${lead.source || '-'}</td>
+                        <td>
+                            <button class="btn btn-primary" onclick="viewLead('${lead.id}')" style="padding: 0.25rem 0.75rem; font-size: 0.75rem;">View</button>
+                            ${lead.contacted ? '<span style="color: #22c55e;">✓ Contacted</span>' : ''}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function renderPagination(pages, current) {
+            const paginationDiv = document.getElementById('pagination');
+
+            if (pages <= 1) {
+                paginationDiv.innerHTML = '';
+                return;
+            }
+
+            let html = '';
+            if (current > 1) {
+                html += `<button onclick="goToPage(${current - 1})">← Previous</button>`;
+            }
+
+            for (let i = 1; i <= pages; i++) {
+                if (i === current) {
+                    html += `<button class="active">${i}</button>`;
+                } else {
+                    html += `<button onclick="goToPage(${i})">${i}</button>`;
+                }
+            }
+
+            if (current < pages) {
+                html += `<button onclick="goToPage(${current + 1})">Next →</button>`;
+            }
+
+            paginationDiv.innerHTML = html;
+        }
+
+        function goToPage(page) {
+            currentPage = page;
+            loadLeads();
+            window.scrollTo(0, 0);
+        }
+
+        async function loadStats() {
+            try {
+                const data = await fetch('/api/stats', {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
+                }).then(r => r.json());
+
+                document.getElementById('stat-total').textContent = data.total_leads;
+                document.getElementById('stat-new').textContent = data.new_leads;
+                document.getElementById('stat-contacted').textContent = data.contacted_leads;
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+
+        async function viewLead(leadId) {
+            try {
+                const lead = await fetch(`/api/leads/${leadId}`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
+                }).then(r => r.json());
+
+                currentLead = lead;
+
+                const body = document.getElementById('modal-body');
+                body.innerHTML = `
+                    <div class="modal-field">
+                        <label>Address</label>
+                        <p>${lead.address || 'N/A'}</p>
+                    </div>
+                    <div class="modal-field">
+                        <label>City</label>
+                        <p>${lead.city || 'N/A'}</p>
+                    </div>
+                    <div class="modal-field">
+                        <label>Score</label>
+                        <p>${lead.score || 0}</p>
+                    </div>
+                    <div class="modal-field">
+                        <label>Estimated Value</label>
+                        <p>$${(lead.value || 0).toLocaleString()}</p>
+                    </div>
+                    <div class="modal-field">
+                        <label>Source</label>
+                        <p>${lead.source || 'N/A'}</p>
+                    </div>
+                    <div class="modal-field">
+                        <label>Description</label>
+                        <p>${lead.description || 'N/A'}</p>
+                    </div>
+                    ${lead.source_url ? `
+                    <div class="modal-field">
+                        <label>Source Link</label>
+                        <p><a href="${lead.source_url}" target="_blank">View on source website →</a></p>
+                    </div>
+                    ` : ''}
+                `;
+
+                document.getElementById('lead-modal').classList.add('active');
+            } catch (e) {
+                showError('Failed to load lead details');
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('lead-modal').classList.remove('active');
+        }
+
+        async function logContact() {
+            if (!currentLead) return;
+
+            try {
+                await fetch(`/api/leads/${currentLead.id}/contact`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ type: 'contacted' })
+                });
+
+                showSuccess('Contact logged!');
+                closeModal();
+                loadLeads();
+                loadStats();
+            } catch (e) {
+                showError('Failed to log contact');
+            }
+        }
+
+        function resetFilters() {
+            document.getElementById('filter-city').value = '';
+            document.getElementById('filter-agent').value = '';
+            document.getElementById('filter-status').value = 'all';
+            document.getElementById('filter-score').value = '';
+            document.getElementById('filter-value').value = '';
+            currentPage = 1;
+            loadLeads();
+        }
+
+        function logout() {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            window.location.href = '/login.html';
+        }
+
+        function showError(msg) {
+            const container = document.querySelector('.container');
+            const div = document.createElement('div');
+            div.className = 'error';
+            div.textContent = msg;
+            container.insertBefore(div, container.firstChild);
+            setTimeout(() => div.remove(), 5000);
+        }
+
+        function showSuccess(msg) {
+            const container = document.querySelector('.container');
+            const div = document.createElement('div');
+            div.className = 'success';
+            div.textContent = msg;
+            container.insertBefore(div, container.firstChild);
+            setTimeout(() => div.remove(), 3000);
+        }
+
+        // Auto-close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('lead-modal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', init);
+
+        // Reload stats every 30 seconds
+        setInterval(loadStats, 30000);
+    </script>
+</body>
+</html>
