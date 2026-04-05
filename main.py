@@ -1,5 +1,5 @@
 """
-main.py v3 — Orquestador principal Insul-Techs Lead Agents
+main.py v3 — Orquestador principal Lead Generation Agents
 
 ⚡ OPTIMIZACIONES v3:
   1. Agentes singleton — se instancian UNA sola vez al arrancar,
@@ -98,7 +98,7 @@ def run_agent(agent_key: str):
 def cmd_test():
     logger.info("Enviando mensaje de prueba a Telegram...")
     ok = send_message(
-        "✅ *Insul-Techs Lead Agents v3* conectado correctamente.\n"
+        "✅ *Lead Generation Agents v3* conectado correctamente.\n"
         "El bot está listo para enviar leads."
     )
     if ok:
@@ -176,7 +176,7 @@ def cmd_start():
 
 # ── Entry point ────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Insul-Techs Lead Agents v3")
+    parser = argparse.ArgumentParser(description="Lead Generation Agents v3")
     parser.add_argument("--test",  action="store_true")
     parser.add_argument("--stats", action="store_true")
     parser.add_argument("--run",   metavar="AGENT")

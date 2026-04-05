@@ -1,4 +1,4 @@
-# Insulleads
+
 
 Sistema automatizado de generacion de leads para contratistas de insulacion en el Bay Area.
 
@@ -344,7 +344,7 @@ CENSUS_API_KEY=              # Demografia — gratis en api.census.gov/data/key_
 ATTOM_API_KEY=               # Datos de propiedad — $200/mes
 HUNTER_API_KEY=              # Email finder — $49/mes (100 gratis)
 SENDGRID_API_KEY=            # Email outreach — $15/mes
-SENDGRID_FROM_EMAIL=leads@insul-techs.com
+SENDGRID_FROM_EMAIL=leads@example.com
 SENDGRID_TO_EMAIL=tu@email.com
 GOOGLE_GEOCODE_API_KEY=      # Geocoding — ~$30/mes
 
@@ -411,7 +411,6 @@ sudo nano /etc/systemd/system/insulleads.service
 Pega este contenido:
 ```ini
 [Unit]
-Description=Insulleads Lead Generation Agents
 After=network.target
 
 [Service]

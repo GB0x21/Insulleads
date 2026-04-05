@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════
-#  Insul-Techs Lead Agents — Deploy Script para Droplet Ubuntu
+#  Lead Generation Agents — Deploy Script para Droplet Ubuntu
 #  Ejecutar como root en un droplet recien creado:
 #    curl -sSL https://raw.githubusercontent.com/GB0x21/Insulleads/main/deploy.sh | bash
 #  o:
@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+# Evitar prompts interactivos durante apt upgrade
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 APP_USER="insulleads"
 APP_DIR="/home/${APP_USER}/Insulleads"
 REPO_URL="https://github.com/GB0x21/Insulleads.git"
@@ -16,7 +20,7 @@ BRANCH="main"
 
 echo ""
 echo "══════════════════════════════════════════════════"
-echo "  Insul-Techs Lead Agents — Instalacion Automatica"
+echo "  Lead Generation Agents — Instalacion Automatica"
 echo "══════════════════════════════════════════════════"
 echo ""
 
@@ -29,16 +33,16 @@ fi
 
 # ── 2. Actualizar sistema ─────────────────────────────────
 echo "[1/8] Actualizando sistema..."
-apt update -qq && apt upgrade -y -qq
+apt update -qq && apt upgrade -y -qq -o Dpkg::Options::="--force-confold"
 
 # ── 3. Instalar dependencias ──────────────────────────────
 echo "[2/8] Instalando Python 3, pip, git..."
-apt install -y -qq python3 python3-pip python3-venv git curl
+apt install -y -qq -o Dpkg::Options::="--force-confold" python3 python3-pip python3-venv git curl
 
 # ── 4. Crear usuario ──────────────────────────────────────
 echo "[3/8] Creando usuario '${APP_USER}'..."
 if ! id "${APP_USER}" &>/dev/null; then
-    adduser --disabled-password --gecos "Insul-Techs Lead Bot" "${APP_USER}"
+    adduser --disabled-password --gecos "Lead Generation Bot" "${APP_USER}"
 fi
 
 # ── 5. Clonar repositorio ─────────────────────────────────
@@ -83,7 +87,7 @@ sudo -u "${APP_USER}" mkdir -p "${APP_DIR}/data" "${APP_DIR}/contacts"
 echo "[7/8] Configurando servicio systemd..."
 cat > /etc/systemd/system/insulleads.service << SYSTEMD_EOF
 [Unit]
-Description=Insul-Techs Lead Generation Agents
+Description=Lead Generation Agents
 After=network.target
 Wants=network-online.target
 
