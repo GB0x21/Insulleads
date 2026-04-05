@@ -69,9 +69,23 @@ def _cutoff_iso() -> str:
     return (datetime.utcnow() - timedelta(days=30 * RODENT_MONTHS)).strftime("%Y-%m-%dT00:00:00")
 
 
+# Keywords that indicate non-pest reports to exclude
+EXCLUDED_KEYWORDS = [
+    "ABANDONED VEHICLE", "INOPERATIVE VEHICLE", "PARKED VEHICLE",
+    "PARKING VIOLATION", "ILLEGAL DUMPING", "GRAFFITI", "POTHOLE",
+    "STREET LIGHT", "SIDEWALK", "TREE TRIM", "NOISE COMPLAINT",
+    "HOMELESS", "ENCAMPMENT",
+]
+
+
 def _classify_pest(text: str) -> dict | None:
     """Clasifica el tipo de plaga y retorna metadata de severidad."""
     upper = (text or "").upper()
+
+    # Exclude non-pest reports (vehicles, graffiti, etc.)
+    if any(excl in upper for excl in EXCLUDED_KEYWORDS):
+        return None
+
     for pest_type, info in PEST_KEYWORDS.items():
         if any(term in upper for term in info["terms"]):
             return {

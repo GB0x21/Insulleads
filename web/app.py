@@ -222,59 +222,63 @@ def list_leads():
     page = request.args.get('page', 1, type=int)
     per_page = 100
 
-    # Get user's accessible cities and agents
+    # Get user's accessible cities and agents (by name)
     accessible_cities = get_user_cities(user_id)
     accessible_agents = get_user_agents(user_id)
 
     if not accessible_cities or not accessible_agents:
         return jsonify({"leads": [], "total": 0, "pages": 0}), 200
 
-    city_ids = [c['id'] for c in accessible_cities]
+    city_names = [c['name'] for c in accessible_cities]
     agent_names = [a['name'] for a in accessible_agents]
 
-    # Build query
+    # Build query against consolidated_leads
+    # Schema: address_key, address, city (text), agent_sources, first_seen, last_updated, lead_data (JSON), notified
     conn = get_db_connection()
     c = conn.cursor()
 
     where_clauses = []
     params = []
 
-    # City filter
-    if city_id and city_id in city_ids:
-        where_clauses.append("l.city = ?")
-        params.append(city_id)
-    elif accessible_cities:
-        # Include all accessible cities
-        placeholders = ','.join('?' * len(city_ids))
+    # City filter (consolidated_leads.city is text name, not ID)
+    if city_id:
+        # Look up city name from ID
+        c.execute("SELECT name FROM cities WHERE id = ?", (city_id,))
+        city_row = c.fetchone()
+        if city_row:
+            where_clauses.append("l.city = ?")
+            params.append(city_row[0])
+    else:
+        # Filter by accessible city names
+        placeholders = ','.join('?' * len(city_names))
         where_clauses.append(f"l.city IN ({placeholders})")
-        params.extend(city_ids)
+        params.extend(city_names)
 
-    # Agent filter
+    # Agent filter (agent_sources is comma-separated agent keys)
     if agent_name and agent_name in agent_names:
-        where_clauses.append("l.source LIKE ?")
+        where_clauses.append("l.agent_sources LIKE ?")
         params.append(f"%{agent_name}%")
     elif agent_names:
-        # Include all accessible agents
-        or_clauses = ' OR '.join(['l.source LIKE ?' for _ in agent_names])
+        or_clauses = ' OR '.join(['l.agent_sources LIKE ?' for _ in agent_names])
         where_clauses.append(f"({or_clauses})")
         params.extend([f"%{a}%" for a in agent_names])
 
-    # Score filter
+    # Score filter (extract from JSON)
     if min_score > 0:
-        where_clauses.append("l.score >= ?")
+        where_clauses.append("CAST(json_extract(l.lead_data, '$._scoring.score') AS INTEGER) >= ?")
         params.append(min_score)
 
-    # Value filter
+    # Value filter (extract from JSON)
     if min_value > 0:
-        where_clauses.append("l.value >= ?")
+        where_clauses.append("CAST(COALESCE(json_extract(l.lead_data, '$.value_float'), 0) AS INTEGER) >= ?")
         params.append(min_value)
 
     # Status filter
     if status == 'contacted':
-        where_clauses.append("EXISTS (SELECT 1 FROM lead_contacts WHERE lead_id = l.id AND user_id = ?)")
+        where_clauses.append("EXISTS (SELECT 1 FROM lead_contacts WHERE lead_id = l.address_key AND user_id = ?)")
         params.append(user_id)
     elif status == 'new':
-        where_clauses.append("NOT EXISTS (SELECT 1 FROM lead_contacts WHERE lead_id = l.id AND user_id = ?)")
+        where_clauses.append("NOT EXISTS (SELECT 1 FROM lead_contacts WHERE lead_id = l.address_key AND user_id = ?)")
         params.append(user_id)
 
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
@@ -286,17 +290,40 @@ def list_leads():
     # Get paginated results
     offset = (page - 1) * per_page
     c.execute(f"""
-        SELECT l.id, l.address, l.city, l.score, l.value, l.source, l.source_url,
-               l.description, l.created_at
+        SELECT l.address_key, l.address, l.city, l.agent_sources,
+               l.first_seen, l.last_updated, l.lead_data
         FROM consolidated_leads l
         WHERE {where_sql}
-        ORDER BY l.created_at DESC
+        ORDER BY l.last_updated DESC
         LIMIT ? OFFSET ?
     """, params + [per_page, offset])
 
+    import json as json_mod
     leads = []
     for row in c.fetchall():
-        lead = dict(row)
+        row_dict = dict(row)
+        # Parse lead_data JSON for display fields
+        lead_data = {}
+        try:
+            lead_data = json_mod.loads(row_dict.get('lead_data', '{}') or '{}')
+        except Exception:
+            pass
+
+        scoring = lead_data.get('_scoring', {})
+        lead = {
+            'id': row_dict['address_key'],
+            'address': row_dict['address'],
+            'city': row_dict['city'],
+            'score': scoring.get('score', 0),
+            'value': lead_data.get('value_float', 0),
+            'source': row_dict['agent_sources'],
+            'source_url': lead_data.get('source_url', ''),
+            'description': lead_data.get('description', ''),
+            'created_at': row_dict['first_seen'],
+            'contractor': lead_data.get('contractor', ''),
+            'contact_phone': lead_data.get('contact_phone', ''),
+            'contact_email': lead_data.get('contact_email', ''),
+        }
 
         # Check if user has contacted this lead
         c.execute("""
@@ -318,7 +345,7 @@ def list_leads():
     }), 200
 
 
-@app.route('/api/leads/<lead_id>', methods=['GET'])
+@app.route('/api/leads/<path:lead_id>', methods=['GET'])
 @require_auth
 def get_lead(lead_id):
     """Get single lead detail."""
@@ -327,28 +354,51 @@ def get_lead(lead_id):
     if not check_permission(user_id, "leads", "view"):
         return jsonify({"error": "Permission denied"}), 403
 
+    import json as json_mod
     conn = get_db_connection()
     c = conn.cursor()
 
     c.execute("""
-        SELECT l.id, l.address, l.city, l.score, l.value, l.source, l.source_url,
-               l.description, l.created_at, l.data
-        FROM consolidated_leads l
-        WHERE l.id = ?
+        SELECT address_key, address, city, agent_sources, first_seen, last_updated, lead_data
+        FROM consolidated_leads
+        WHERE address_key = ?
     """, (lead_id,))
 
-    lead = c.fetchone()
+    row = c.fetchone()
     conn.close()
 
-    if not lead:
+    if not row:
         return jsonify({"error": "Lead not found"}), 404
 
-    lead = dict(lead)
+    row_dict = dict(row)
+    lead_data = {}
+    try:
+        lead_data = json_mod.loads(row_dict.get('lead_data', '{}') or '{}')
+    except Exception:
+        pass
+
+    scoring = lead_data.get('_scoring', {})
+    lead = {
+        'id': row_dict['address_key'],
+        'address': row_dict['address'],
+        'city': row_dict['city'],
+        'score': scoring.get('score', 0),
+        'value': lead_data.get('value_float', 0),
+        'source': row_dict['agent_sources'],
+        'source_url': lead_data.get('source_url', ''),
+        'description': lead_data.get('description', ''),
+        'created_at': row_dict['first_seen'],
+        'contractor': lead_data.get('contractor', ''),
+        'contact_phone': lead_data.get('contact_phone', ''),
+        'contact_email': lead_data.get('contact_email', ''),
+        'owner': lead_data.get('owner', ''),
+        'scoring_reasons': scoring.get('reasons', []),
+    }
 
     return jsonify(lead), 200
 
 
-@app.route('/api/leads/<lead_id>/contact', methods=['POST'])
+@app.route('/api/leads/<path:lead_id>/contact', methods=['POST'])
 @require_auth
 def log_lead_contact(lead_id):
     """Log user contact with a lead."""
@@ -365,7 +415,7 @@ def log_lead_contact(lead_id):
     c = conn.cursor()
 
     # Verify lead exists
-    c.execute("SELECT id FROM consolidated_leads WHERE id = ?", (lead_id,))
+    c.execute("SELECT address_key FROM consolidated_leads WHERE address_key = ?", (lead_id,))
     if not c.fetchone():
         conn.close()
         return jsonify({"error": "Lead not found"}), 404
@@ -395,14 +445,14 @@ def get_stats():
     conn = get_db_connection()
     c = conn.cursor()
 
-    # Get accessible cities and agents
+    # Get accessible cities and agents (by name)
     accessible_cities = get_user_cities(user_id)
     accessible_agents = get_user_agents(user_id)
 
-    city_ids = [c['id'] for c in accessible_cities]
+    city_names = [c_item['name'] for c_item in accessible_cities]
     agent_names = [a['name'] for a in accessible_agents]
 
-    if not city_ids or not agent_names:
+    if not city_names or not agent_names:
         return jsonify({
             "total_leads": 0,
             "new_leads": 0,
@@ -411,16 +461,16 @@ def get_stats():
             "by_city": {}
         }), 200
 
-    # Build where clause
-    placeholders_cities = ','.join('?' * len(city_ids))
-    or_agents = ' OR '.join(['source LIKE ?' for _ in agent_names])
+    # Build where clause (city is text name in consolidated_leads)
+    placeholders_cities = ','.join('?' * len(city_names))
+    or_agents = ' OR '.join(['agent_sources LIKE ?' for _ in agent_names])
 
     # Total leads
     c.execute(f"""
         SELECT COUNT(*) FROM consolidated_leads
         WHERE city IN ({placeholders_cities})
         AND ({or_agents})
-    """, city_ids + [f"%{a}%" for a in agent_names])
+    """, city_names + [f"%{a}%" for a in agent_names])
     total = c.fetchone()[0]
 
     # New leads (not contacted by user)
@@ -428,8 +478,8 @@ def get_stats():
         SELECT COUNT(*) FROM consolidated_leads l
         WHERE city IN ({placeholders_cities})
         AND ({or_agents})
-        AND NOT EXISTS (SELECT 1 FROM lead_contacts WHERE lead_id = l.id AND user_id = ?)
-    """, city_ids + [f"%{a}%" for a in agent_names] + [user_id])
+        AND NOT EXISTS (SELECT 1 FROM lead_contacts WHERE lead_id = l.address_key AND user_id = ?)
+    """, city_names + [f"%{a}%" for a in agent_names] + [user_id])
     new = c.fetchone()[0]
 
     # Contacted leads
@@ -437,32 +487,31 @@ def get_stats():
         SELECT COUNT(*) FROM lead_contacts
         WHERE user_id = ?
         AND lead_id IN (
-            SELECT id FROM consolidated_leads
+            SELECT address_key FROM consolidated_leads
             WHERE city IN ({placeholders_cities})
             AND ({or_agents})
         )
-    """, [user_id] + city_ids + [f"%{a}%" for a in agent_names])
+    """, [user_id] + city_names + [f"%{a}%" for a in agent_names])
     contacted = c.fetchone()[0]
 
     # Leads by agent
     c.execute(f"""
-        SELECT source, COUNT(*) as count
+        SELECT agent_sources, COUNT(*) as count
         FROM consolidated_leads
         WHERE city IN ({placeholders_cities})
         AND ({or_agents})
-        GROUP BY source
-    """, city_ids + [f"%{a}%" for a in agent_names])
+        GROUP BY agent_sources
+    """, city_names + [f"%{a}%" for a in agent_names])
     by_agent = {row[0]: row[1] for row in c.fetchall()}
 
     # Leads by city
     c.execute(f"""
-        SELECT c.name, COUNT(*) as count
-        FROM consolidated_leads l
-        JOIN cities c ON l.city = c.id
-        WHERE l.city IN ({placeholders_cities})
+        SELECT city, COUNT(*) as count
+        FROM consolidated_leads
+        WHERE city IN ({placeholders_cities})
         AND ({or_agents})
-        GROUP BY l.city
-    """, city_ids + [f"%{a}%" for a in agent_names])
+        GROUP BY city
+    """, city_names + [f"%{a}%" for a in agent_names])
     by_city = {row[0]: row[1] for row in c.fetchall()}
 
     conn.close()
