@@ -19,6 +19,7 @@ set -euo pipefail
 # Evitar prompts interactivos durante apt upgrade
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
+export COMPOSER_ALLOW_SUPERUSER=1
 
 APP_USER="insulleads"
 APP_DIR="/home/${APP_USER}/Insulleads"
