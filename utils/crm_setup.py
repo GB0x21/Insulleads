@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────
-KRAYIN_URL = os.getenv("KRAYIN_URL", "http://localhost/crm")
+KRAYIN_URL = os.getenv("KRAYIN_URL", "http://localhost")
 ADMIN_EMAIL = os.getenv("KRAYIN_ADMIN_EMAIL", "admin@example.com")
 ADMIN_PASSWORD = os.getenv("KRAYIN_ADMIN_PASSWORD", "admin123")
 
@@ -313,7 +313,7 @@ class KrayinSetup:
         logger.info(f"\n  Pipeline: {PIPELINE_NAME} ({len(PIPELINE_STAGES)} etapas)")
         logger.info(f"  Sources:  {len(source_ids)} fuentes de leads")
         logger.info(f"  Types:    {len(type_ids)} tipos de lead")
-        logger.info(f"\n  CRM login: {KRAYIN_URL}/admin/login")
+        logger.info(f"\n  CRM login: {KRAYIN_URL.rstrip('/')}/admin/login")
         logger.info(f"  Email:     {ADMIN_EMAIL}")
         logger.info("")
 
