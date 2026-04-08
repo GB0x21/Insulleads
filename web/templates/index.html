@@ -402,6 +402,10 @@
             <div class="user-info">
                 <p id="username">Loading...</p>
             </div>
+            <a href="/crm/admin/login" target="_blank"
+               style="background:#6366f1;color:white;padding:0.5rem 1rem;border-radius:6px;text-decoration:none;font-size:0.85rem;font-weight:600;display:inline-flex;align-items:center;gap:0.4rem;">
+                Abrir CRM
+            </a>
             <button class="logout-btn" onclick="logout()">Logout</button>
         </div>
     </div>
@@ -683,6 +687,22 @@
                         <p>$${(lead.value || 0).toLocaleString()}</p>
                     </div>
                     <div class="modal-field">
+                        <label>Contractor (GC)</label>
+                        <p>${lead.contractor || 'N/A'}</p>
+                    </div>
+                    ${lead.contact_phone ? `
+                    <div class="modal-field">
+                        <label>Phone</label>
+                        <p><a href="tel:${lead.contact_phone}">${lead.contact_phone}</a></p>
+                    </div>
+                    ` : ''}
+                    ${lead.contact_email ? `
+                    <div class="modal-field">
+                        <label>Email</label>
+                        <p><a href="mailto:${lead.contact_email}">${lead.contact_email}</a></p>
+                    </div>
+                    ` : ''}
+                    <div class="modal-field">
                         <label>Source</label>
                         <p>${lead.source || 'N/A'}</p>
                     </div>
@@ -690,6 +710,12 @@
                         <label>Description</label>
                         <p>${lead.description || 'N/A'}</p>
                     </div>
+                    ${lead.scoring_reasons && lead.scoring_reasons.length ? `
+                    <div class="modal-field">
+                        <label>Score Reasons</label>
+                        <p>${lead.scoring_reasons.join('<br>')}</p>
+                    </div>
+                    ` : ''}
                     ${lead.source_url ? `
                     <div class="modal-field">
                         <label>Source Link</label>

@@ -36,6 +36,7 @@ from bs4 import BeautifulSoup
 from agents.base import BaseAgent
 from utils.telegram import send_lead
 from utils.contacts_loader import load_all_contacts, lookup_contact
+from utils.inspection_schedule import get_next_visit_window, format_visit_info
 
 logger = logging.getLogger(__name__)
 
@@ -914,9 +915,21 @@ class PermitsAgent(BaseAgent):
             if lead.get("cslb_status"):
                 fields["✅ Estado Licencia"]   = lead["cslb_status"]
 
+        # Lookup inspection schedule for visit timing
+        visit = get_next_visit_window(lead)
+        if visit:
+            lead["_next_inspection"] = visit
+            fields["🗓️ Proxima Inspeccion"] = visit.get("best_visit", "")
+            if visit.get("type"):
+                fields["🔍 Tipo Inspeccion"] = visit["type"]
+
+        cta = "📲 Contacta al GC y ofrece insulación para el proyecto"
+        if visit:
+            cta = f"📲 Visita la obra: {visit.get('best_visit', '')} — el GC estara en sitio"
+
         send_lead(
             agent_name=self.name, emoji=self.emoji,
             title=f"{lead.get('city')} — {lead.get('address')}",
             fields=fields, url=lead.get("permit_url"),
-            cta="📲 Contacta al GC y ofrece insulación para el proyecto",
+            cta=cta,
         )

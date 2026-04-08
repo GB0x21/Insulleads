@@ -34,6 +34,7 @@ from utils.telegram import send_lead
 from utils.contacts_loader import load_all_contacts, lookup_contact
 from utils.lead_scoring import score_lead, format_score_line
 from utils.notifications import notify_multichannel
+from utils.inspection_schedule import get_next_visit_window
 
 logger = logging.getLogger(__name__)
 
@@ -880,13 +881,24 @@ class ConstructionAgent(BaseAgent):
         if lead.get("source") == "BuildZoom":
             fields["📡 Fuente"] = "BuildZoom"
 
+        # Lookup inspection schedule for visit timing
+        visit = get_next_visit_window(lead)
+        if visit:
+            lead["_next_inspection"] = visit
+            fields["🗓️ Proxima Inspeccion"] = visit.get("best_visit", "")
+            if visit.get("type"):
+                fields["🔍 Tipo Inspeccion"] = visit["type"]
+
         action = lead.get("action", "")
+        cta = f"🚧 {action}"
+        if visit:
+            cta = f"🚧 Visita la obra: {visit.get('best_visit', '')} — el GC estara en sitio"
 
         send_lead(
             agent_name=self.name, emoji=self.emoji,
             title=f"{lead['city']} — {lead['address']}",
             fields=fields,
-            cta=f"🚧 {action}",
+            cta=cta,
         )
 
         # Multi-canal para leads HOT (framing/rough_mep)
