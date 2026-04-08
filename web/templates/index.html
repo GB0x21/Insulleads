@@ -242,6 +242,31 @@
             background: #6b7280;
         }
 
+        .crm-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-decoration: none;
+        }
+
+        .crm-synced {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .crm-synced:hover {
+            background: #bbf7d0;
+        }
+
+        .crm-pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
         .lead-address {
             font-weight: 500;
             color: #1f2937;
@@ -402,7 +427,7 @@
             <div class="user-info">
                 <p id="username">Loading...</p>
             </div>
-            <a href="/crm/admin/login" target="_blank"
+            <a href="/crm" target="_blank"
                style="background:#6366f1;color:white;padding:0.5rem 1rem;border-radius:6px;text-decoration:none;font-size:0.85rem;font-weight:600;display:inline-flex;align-items:center;gap:0.4rem;">
                 Abrir CRM
             </a>
@@ -424,6 +449,10 @@
             <div class="stat-card">
                 <div class="stat-value" id="stat-contacted">-</div>
                 <div class="stat-label">Contacted</div>
+            </div>
+            <div class="stat-card" style="border-left-color: #8b5cf6;">
+                <div class="stat-value" id="stat-crm-synced">-</div>
+                <div class="stat-label">CRM Synced</div>
             </div>
         </div>
 
@@ -471,16 +500,17 @@
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 40%;">Address</th>
-                        <th style="width: 15%;">City</th>
-                        <th style="width: 10%;">Score</th>
-                        <th style="width: 15%;">Source</th>
-                        <th style="width: 20%;">Actions</th>
+                        <th style="width: 35%;">Address</th>
+                        <th style="width: 12%;">City</th>
+                        <th style="width: 8%;">Score</th>
+                        <th style="width: 13%;">Source</th>
+                        <th style="width: 10%;">CRM</th>
+                        <th style="width: 22%;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="leads-tbody">
                     <tr>
-                        <td colspan="5" style="text-align: center; padding: 2rem;">
+                        <td colspan="6" style="text-align: center; padding: 2rem;">
                             <div class="loading">Loading leads...</div>
                         </td>
                     </tr>
@@ -585,7 +615,7 @@
             const tbody = document.getElementById('leads-tbody');
 
             if (leads.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem;">No leads found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 2rem;">No leads found</td></tr>';
                 return;
             }
 
@@ -597,15 +627,25 @@
                 else if (score >= 40) scoreClass = 'score-medium';
                 else if (score >= 20) scoreClass = 'score-cool';
 
+                let crmHtml;
+                if (lead.crm_synced && lead.krayin_lead_id) {
+                    crmHtml = `<a href="/crm/admin/leads/view/${lead.krayin_lead_id}" target="_blank" class="crm-badge crm-synced">CRM #${lead.krayin_lead_id}</a>`;
+                } else if (lead.crm_synced) {
+                    crmHtml = '<span class="crm-badge crm-synced">Synced</span>';
+                } else {
+                    crmHtml = '<span class="crm-badge crm-pending">Pending</span>';
+                }
+
                 return `
                     <tr>
                         <td><span class="lead-address" onclick="viewLead('${lead.id}')">${lead.address || 'N/A'}</span></td>
                         <td>${lead.city || '-'}</td>
                         <td><span class="score-badge ${scoreClass}">${score}</span></td>
                         <td>${lead.source || '-'}</td>
+                        <td>${crmHtml}</td>
                         <td>
                             <button class="btn btn-primary" onclick="viewLead('${lead.id}')" style="padding: 0.25rem 0.75rem; font-size: 0.75rem;">View</button>
-                            ${lead.contacted ? '<span style="color: #22c55e;">✓ Contacted</span>' : ''}
+                            ${lead.contacted ? '<span style="color: #22c55e;">Contacted</span>' : ''}
                         </td>
                     </tr>
                 `;
@@ -655,6 +695,7 @@
                 document.getElementById('stat-total').textContent = data.total_leads;
                 document.getElementById('stat-new').textContent = data.new_leads;
                 document.getElementById('stat-contacted').textContent = data.contacted_leads;
+                document.getElementById('stat-crm-synced').textContent = data.crm_synced || 0;
             } catch (e) {
                 console.error('Failed to load stats:', e);
             }
@@ -719,9 +760,18 @@
                     ${lead.source_url ? `
                     <div class="modal-field">
                         <label>Source Link</label>
-                        <p><a href="${lead.source_url}" target="_blank">View on source website →</a></p>
+                        <p><a href="${lead.source_url}" target="_blank">View on source website</a></p>
                     </div>
                     ` : ''}
+                    <div class="modal-field">
+                        <label>CRM Status</label>
+                        ${lead.crm_synced && lead.krayin_lead_id
+                            ? `<p><a href="/crm/admin/leads/view/${lead.krayin_lead_id}" target="_blank" style="color:#16a34a;font-weight:600;">Ver en CRM (Lead #${lead.krayin_lead_id})</a></p>`
+                            : lead.crm_synced
+                                ? '<p style="color:#16a34a;">Sincronizado con CRM</p>'
+                                : '<p style="color:#d97706;">Pendiente de sincronizacion</p>'
+                        }
+                    </div>
                 `;
 
                 document.getElementById('lead-modal').classList.add('active');

@@ -469,22 +469,23 @@ server {
     client_max_body_size 50M;
 
     # ── Krayin CRM (Laravel/PHP) ──────────────────────────
-    location /crm {
+    location ^~ /crm {
         alias ${CRM_DIR}/public;
         index index.php;
-        try_files \$uri \$uri/ @crm_rewrite;
+        try_files \$uri \$uri/ @crm_fallback;
 
         location ~ \.php\$ {
             fastcgi_pass unix:${PHP_FPM_SOCK};
-            fastcgi_param SCRIPT_FILENAME \$request_filename;
-            fastcgi_param SCRIPT_NAME \$fastcgi_script_name;
             include fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME \$request_filename;
             fastcgi_read_timeout 300s;
         }
     }
 
-    location @crm_rewrite {
-        rewrite ^/crm/(.*)\$ /crm/index.php/\$1 last;
+    # Fallback: route all non-file CRM requests through index.php
+    # REQUEST_URI preserves the original path for Laravel routing
+    location @crm_fallback {
+        rewrite ^/crm(/.*)?$ /crm/index.php last;
     }
 
     # ── Insulleads Flask Dashboard ────────────────────────
