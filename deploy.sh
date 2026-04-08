@@ -9,7 +9,6 @@
 #
 #  Incluye:
 #    - Lead generation agents (Python)
-#    - Dashboard web (Flask/Gunicorn)
 #    - Krayin CRM (Laravel/PHP) con sync automatico
 #
 #  Detecta automaticamente si es instalacion nueva o actualizacion.
@@ -45,7 +44,7 @@ fail()  { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  Insulleads — Instalacion / Actualizacion Automatica"
-echo "  (Dashboard + Krayin CRM)"
+echo "  (Agentes + Krayin CRM)"
 echo "══════════════════════════════════════════════════════"
 echo ""
 
@@ -167,7 +166,7 @@ if [ ! -d "${VENV}" ]; then
 fi
 sudo -u "${APP_USER}" ${PIP} install --upgrade pip -q
 sudo -u "${APP_USER}" ${PIP} install -r "${APP_DIR}/requirements.txt" -q
-ok "Dependencias Python instaladas (Flask, PyJWT, bcrypt, etc.)"
+ok "Dependencias Python instaladas"
 
 # ── 11. Crear directorios necesarios ─────────────────────────
 sudo -u "${APP_USER}" mkdir -p "${APP_DIR}/data" "${APP_DIR}/contacts"
@@ -183,23 +182,16 @@ if [ ! -f "${APP_DIR}/.env" ]; then
         sudo -u "${APP_USER}" cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
     else
         # Crear .env minimo
-        JWT_KEY=$(openssl rand -hex 32)
         sudo -u "${APP_USER}" bash -c "cat > ${APP_DIR}/.env << ENVEOF
 # ── Telegram (REQUERIDO) ──
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 
-# ── Dashboard Web ──
-JWT_SECRET_KEY=${JWT_KEY}
-JWT_ACCESS_EXPIRY=3600
-JWT_REFRESH_EXPIRY=604800
-PORT=5000
-
 # ── Base de datos ──
 DB_PATH=data/leads.db
 
 # ── Krayin CRM ──
-KRAYIN_URL=http://localhost/crm
+KRAYIN_URL=http://localhost
 KRAYIN_ADMIN_EMAIL=admin@example.com
 KRAYIN_ADMIN_PASSWORD=admin123
 KRAYIN_DB_PASSWORD=${KRAYIN_DB_PASS}
@@ -208,25 +200,12 @@ ENVEOF"
     fi
     warn ".env creado — DEBES configurar TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID"
 else
-    # Agregar variables web si no existen
-    if ! grep -q "JWT_SECRET_KEY" "${APP_DIR}/.env"; then
-        JWT_KEY=$(openssl rand -hex 32)
-        sudo -u "${APP_USER}" bash -c "cat >> ${APP_DIR}/.env << ENVEOF
-
-# ── Dashboard Web (agregado automaticamente) ──
-JWT_SECRET_KEY=${JWT_KEY}
-JWT_ACCESS_EXPIRY=3600
-JWT_REFRESH_EXPIRY=604800
-PORT=5000
-ENVEOF"
-        ok "Variables JWT agregadas a .env existente"
-    fi
     # Agregar variables CRM si no existen
     if ! grep -q "KRAYIN_URL" "${APP_DIR}/.env"; then
         sudo -u "${APP_USER}" bash -c "cat >> ${APP_DIR}/.env << ENVEOF
 
 # ── Krayin CRM (agregado automaticamente) ──
-KRAYIN_URL=http://localhost/crm
+KRAYIN_URL=http://localhost
 KRAYIN_ADMIN_EMAIL=admin@example.com
 KRAYIN_ADMIN_PASSWORD=admin123
 KRAYIN_DB_PASSWORD=${KRAYIN_DB_PASS}
@@ -272,7 +251,7 @@ APP_NAME='Insulleads CRM'
 APP_ENV=production
 APP_KEY=
 APP_DEBUG=false
-APP_URL=http://${SERVER_IP_TMP}/crm
+APP_URL=http://${SERVER_IP_TMP}
 APP_TIMEZONE=America/Los_Angeles
 APP_LOCALE=es
 APP_CURRENCY=USD
@@ -345,21 +324,8 @@ else
     cd "${APP_DIR}"
 fi
 
-# ── 15. Inicializar base de datos SQLite + usuarios demo ─────
-info "[13/16] Inicializando base de datos SQLite y usuarios..."
-cd "${APP_DIR}"
-sudo -u "${APP_USER}" ${PYTHON} -c "
-from utils.web_db import init_web_db, seed_cities_and_agents
-init_web_db()
-seed_cities_and_agents()
-print('  Schema creada: 12 tablas, 54 ciudades, 10 agentes')
-"
-# Crear usuarios demo (idempotente — no duplica)
-sudo -u "${APP_USER}" ${PYTHON} "${APP_DIR}/web/init_demo_users.py" 2>/dev/null || true
-ok "Base de datos inicializada con usuarios demo"
-
-# ── 16. Crear servicios systemd ──────────────────────────────
-info "[14/16] Configurando servicios systemd..."
+# ── 15. Crear servicios systemd ──────────────────────────────
+info "[13/16] Configurando servicios systemd..."
 
 # Servicio: Agentes de leads
 cat > /etc/systemd/system/insulleads.service << SYSTEMD_EOF
@@ -375,34 +341,6 @@ Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${APP_DIR}/.env
 ExecStart=${PYTHON} main.py
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-NoNewPrivileges=yes
-ProtectSystem=strict
-ReadWritePaths=${APP_DIR}/data ${APP_DIR}
-PrivateTmp=yes
-
-[Install]
-WantedBy=multi-user.target
-SYSTEMD_EOF
-
-# Servicio: Dashboard web
-cat > /etc/systemd/system/insulleads-web.service << SYSTEMD_EOF
-[Unit]
-Description=Insulleads Web Dashboard
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${APP_USER}
-Group=${APP_USER}
-WorkingDirectory=${APP_DIR}
-EnvironmentFile=${APP_DIR}/.env
-ExecStart=${VENV}/bin/gunicorn -w 4 -b 127.0.0.1:5000 web_server:app
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -449,8 +387,11 @@ WantedBy=timers.target
 SYSTEMD_EOF
 
 systemctl daemon-reload
-systemctl enable insulleads insulleads-web insulleads-crm-sync.timer
-ok "Servicios systemd configurados (insulleads + insulleads-web + crm-sync timer)"
+systemctl enable insulleads insulleads-crm-sync.timer
+# Detener y deshabilitar el servicio Flask si existe de una instalacion anterior
+systemctl stop insulleads-web 2>/dev/null || true
+systemctl disable insulleads-web 2>/dev/null || true
+ok "Servicios systemd configurados (insulleads + crm-sync timer)"
 
 # ── 17. Configurar nginx ────────────────────────────────────
 info "[15/16] Configurando nginx..."
@@ -468,35 +409,26 @@ server {
 
     client_max_body_size 50M;
 
-    # ── Krayin CRM (Laravel/PHP) ──────────────────────────
-    location ^~ /crm {
-        alias ${CRM_DIR}/public;
-        index index.php;
-        try_files \$uri \$uri/ @crm_fallback;
+    # ── Krayin CRM (pagina principal) ─────────────────────
+    root ${CRM_DIR}/public;
+    index index.php;
 
-        location ~ \.php\$ {
-            fastcgi_pass unix:${PHP_FPM_SOCK};
-            include fastcgi_params;
-            fastcgi_param SCRIPT_FILENAME \$request_filename;
-            fastcgi_read_timeout 300s;
-        }
+    # ── PHP handler ───────────────────────────────────────
+    location ~ \.php\$ {
+        fastcgi_pass unix:${PHP_FPM_SOCK};
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_read_timeout 300s;
     }
 
-    # Fallback: route all non-file CRM requests through index.php
-    # REQUEST_URI preserves the original path for Laravel routing
-    location @crm_fallback {
-        rewrite ^/crm(/.*)?$ /crm/index.php last;
-    }
-
-    # ── Insulleads Flask Dashboard ────────────────────────
+    # ── Laravel routing (catch-all) ───────────────────────
     location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 30s;
-        proxy_connect_timeout 10s;
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    # ── Denegar acceso a archivos ocultos ─────────────────
+    location ~ /\.(?!well-known) {
+        deny all;
     }
 }
 NGINX_EOF
@@ -508,19 +440,17 @@ nginx -t && systemctl restart nginx
 systemctl enable nginx
 # Restart PHP-FPM
 systemctl restart php*-fpm 2>/dev/null || true
-ok "Nginx configurado (/ -> dashboard, /crm -> Krayin CRM)"
+ok "Nginx configurado (/ -> Krayin CRM)"
 
 # ── 18. Iniciar/reiniciar servicios ──────────────────────────
-info "[16/16] Iniciando servicios..."
+info "[14/16] Iniciando servicios..."
 if [ "${IS_UPDATE}" = true ]; then
-    systemctl restart insulleads-web 2>/dev/null || systemctl start insulleads-web
     systemctl restart insulleads 2>/dev/null || systemctl start insulleads
     systemctl restart insulleads-crm-sync.timer 2>/dev/null || systemctl start insulleads-crm-sync.timer
     ok "Servicios reiniciados"
 else
-    systemctl start insulleads-web
     systemctl start insulleads-crm-sync.timer
-    ok "Dashboard web + CRM sync iniciados"
+    ok "CRM sync iniciado"
     warn "Agentes NO iniciados — configura .env primero, luego: systemctl start insulleads"
 fi
 
@@ -543,13 +473,8 @@ echo ""
 if [ "${IS_UPDATE}" = true ]; then
     echo -e "  ${GREEN}✓${NC} Codigo actualizado desde ${BRANCH}"
     echo -e "  ${GREEN}✓${NC} Dependencias actualizadas"
-    echo -e "  ${GREEN}✓${NC} Base de datos migrada (nuevas tablas si aplica)"
     echo -e "  ${GREEN}✓${NC} Krayin CRM actualizado"
     echo -e "  ${GREEN}✓${NC} Servicios reiniciados"
-    echo ""
-    echo "  Dashboard:  http://${SERVER_IP}/"
-    echo "  CRM:        http://${SERVER_IP}/crm/admin/login"
-    echo ""
 else
     echo "  SIGUIENTE PASO — Configura Telegram:"
     echo ""
@@ -561,29 +486,14 @@ else
     echo "  Luego inicia los agentes:"
     echo ""
     echo "    sudo systemctl start insulleads"
-    echo ""
 fi
 
-echo "══════════════════════════════════════════════════════════"
-echo "  ACCESO AL DASHBOARD"
-echo "══════════════════════════════════════════════════════════"
 echo ""
-echo "  Dashboard:  http://${SERVER_IP}/"
-echo "  Login:      admin / admin123"
-echo ""
-echo "  Usuarios demo creados:"
-echo "    admin       (admin123)       -> Acceso total"
-echo "    manager     (manager123)     -> Todos los leads"
-echo "    sf_permits  (sfpermits123)   -> Solo SF + permisos"
-echo "    solar_team  (solar123)       -> Solo solar"
-echo "    viewer      (viewer123)      -> Solo lectura"
-echo ""
-
 echo "══════════════════════════════════════════════════════════"
-echo "  ACCESO AL CRM (Krayin)"
+echo "  ACCESO AL CRM"
 echo "══════════════════════════════════════════════════════════"
 echo ""
-echo "  URL:        http://${SERVER_IP}/crm/admin/login"
+echo "  URL:        http://${SERVER_IP}/admin/login"
 echo "  Email:      admin@example.com"
 echo "  Password:   admin123"
 echo ""
@@ -597,12 +507,11 @@ echo "════════════════════════�
 echo "  COMANDOS UTILES"
 echo "══════════════════════════════════════════════════════════"
 echo ""
-echo "  Estado todo:       sudo systemctl status insulleads insulleads-web insulleads-crm-sync.timer"
+echo "  Estado:            sudo systemctl status insulleads insulleads-crm-sync.timer"
 echo "  Logs agentes:      sudo journalctl -u insulleads -f"
-echo "  Logs dashboard:    sudo journalctl -u insulleads-web -f"
 echo "  Logs CRM sync:     sudo journalctl -u insulleads-crm-sync -f"
-echo "  Reiniciar todo:    sudo systemctl restart insulleads insulleads-web"
-echo "  Detener todo:      sudo systemctl stop insulleads insulleads-web"
+echo "  Reiniciar:         sudo systemctl restart insulleads"
+echo "  Detener:           sudo systemctl stop insulleads"
 echo ""
 echo "  Sync CRM manual:   sudo -u ${APP_USER} ${PYTHON} ${APP_DIR}/utils/crm_sync.py"
 echo "  Setup CRM:         sudo -u ${APP_USER} ${PYTHON} ${APP_DIR}/utils/crm_setup.py"

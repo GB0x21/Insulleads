@@ -40,7 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────
-KRAYIN_URL = os.getenv("KRAYIN_URL", "http://localhost/crm")
+KRAYIN_URL = os.getenv("KRAYIN_URL", "http://localhost")
 ADMIN_EMAIL = os.getenv("KRAYIN_ADMIN_EMAIL", "admin@example.com")
 ADMIN_PASSWORD = os.getenv("KRAYIN_ADMIN_PASSWORD", "admin123")
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
