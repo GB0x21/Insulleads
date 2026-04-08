@@ -80,7 +80,7 @@ class CRMSync:
         self.agent_to_source = self.config.get("agent_to_source", {})
         self.type_ids = self.config.get("type_ids", {})
         self._person_cache = {}  # email/phone → person_id
-        self._stage_id_nuevo = None
+        self._stages = {}  # code → stage_id
 
     def authenticate(self) -> bool:
         """Get Sanctum bearer token."""
@@ -105,10 +105,10 @@ class CRMSync:
             logger.error(f"Auth error: {e}")
             return False
 
-    def _get_nuevo_stage_id(self) -> int | None:
-        """Get the 'nuevo' stage ID from the pipeline."""
-        if self._stage_id_nuevo:
-            return self._stage_id_nuevo
+    def _load_stages(self):
+        """Load all pipeline stages into a code→id map."""
+        if self._stages:
+            return
 
         try:
             resp = self.session.get(
@@ -117,15 +117,26 @@ class CRMSync:
             )
             if resp.status_code == 200:
                 data = resp.json().get("data", {})
-                stages = data.get("stages", [])
-                for stage in stages:
-                    if stage.get("code") == "nuevo" or stage.get("sort_order") == 1:
-                        self._stage_id_nuevo = stage["id"]
-                        return self._stage_id_nuevo
+                for stage in data.get("stages", []):
+                    code = stage.get("code", "")
+                    self._stages[code] = stage["id"]
         except Exception as e:
-            logger.debug(f"Error getting stage: {e}")
+            logger.debug(f"Error loading stages: {e}")
 
-        return None
+    def _resolve_stage_id(self, score: int, contacted: bool = False) -> int | None:
+        """Map lead score + status to the appropriate pipeline stage."""
+        self._load_stages()
+
+        if contacted:
+            return self._stages.get("contactado") or self._stages.get("nuevo")
+
+        # Score-based stage assignment
+        if score >= 80:
+            return self._stages.get("calificado") or self._stages.get("nuevo")
+        elif score >= 50:
+            return self._stages.get("contactado") or self._stages.get("nuevo")
+        else:
+            return self._stages.get("nuevo")
 
     def _resolve_source_id(self, agent_sources: str) -> int | None:
         """Map agent_sources string to Krayin source_id."""
@@ -176,9 +187,23 @@ class CRMSync:
 
         return None
 
+    def _detect_lead_type(self, lead_data: dict, agent_sources: str) -> str:
+        """Detect lead type from data and source agents."""
+        desc = (lead_data.get("description") or "").lower()
+        permit = (lead_data.get("permit_type") or "").lower()
+        combined = f"{desc} {permit}"
+
+        if any(w in combined for w in ["commercial", "comercial", "office", "retail", "store"]):
+            return "Comercial"
+        if any(w in combined for w in ["multi", "duplex", "triplex", "apartment", "units"]):
+            return "Multifamiliar"
+        if any(w in combined for w in ["industrial", "warehouse", "factory", "manufacturing"]):
+            return "Industrial"
+        return "Residencial"
+
     def _create_lead(self, address_key: str, address: str, city: str,
-                     agent_sources: str, lead_data: dict) -> bool:
-        """Create a Lead in Krayin CRM."""
+                     agent_sources: str, lead_data: dict) -> int | None:
+        """Create a Lead in Krayin CRM. Returns krayin_lead_id or None."""
         title = f"{address} — {city}"
         if len(title) > 120:
             title = title[:120]
@@ -187,19 +212,36 @@ class CRMSync:
         if lead_data.get("description"):
             description_parts.append(lead_data["description"][:500])
         if lead_data.get("permit_type"):
-            description_parts.append(f"Tipo: {lead_data['permit_type']}")
-        if lead_data.get("agent_sources") or agent_sources:
-            description_parts.append(f"Fuentes: {agent_sources}")
+            description_parts.append(f"Tipo permiso: {lead_data['permit_type']}")
+        if lead_data.get("contractor"):
+            description_parts.append(f"Contratista: {lead_data['contractor']}")
+        if lead_data.get("contact_phone"):
+            description_parts.append(f"Tel: {lead_data['contact_phone']}")
+        if lead_data.get("contact_email"):
+            description_parts.append(f"Email: {lead_data['contact_email']}")
+
+        # Source agents
+        from utils.crm_setup import AGENT_TO_SOURCE
+        source_labels = []
+        for ag in agent_sources.split(","):
+            ag = ag.strip()
+            source_labels.append(AGENT_TO_SOURCE.get(ag, ag))
+        description_parts.append(f"Fuentes: {', '.join(source_labels)}")
 
         # Scoring info
         scoring = lead_data.get("_scoring", {})
+        score = scoring.get("score", 0) if scoring else 0
         if scoring:
-            score = scoring.get("score", 0)
             grade = scoring.get("grade", "")
             description_parts.append(f"Score: {score}/100 ({grade})")
             reasons = scoring.get("reasons", [])
             if reasons:
-                description_parts.append("Razones: " + ", ".join(reasons[:3]))
+                description_parts.append("Razones: " + ", ".join(reasons[:5]))
+
+        # Cross-agent signals
+        cross_count = lead_data.get("_cross_agent_count", 0)
+        if cross_count and cross_count > 1:
+            description_parts.append(f"Senales cruzadas: {cross_count} agentes")
 
         description = "\n".join(description_parts) if description_parts else ""
 
@@ -212,8 +254,12 @@ class CRMSync:
 
         # Resolve IDs
         source_id = self._resolve_source_id(agent_sources)
-        stage_id = self._get_nuevo_stage_id()
+        stage_id = self._resolve_stage_id(score)
         person_id = self._find_or_create_person(lead_data)
+
+        # Detect lead type
+        lead_type_name = self._detect_lead_type(lead_data, agent_sources)
+        lead_type_id = self.type_ids.get(lead_type_name) or self.type_ids.get("Residencial")
 
         # Build lead payload
         payload = {
@@ -230,13 +276,14 @@ class CRMSync:
             payload["lead_source_id"] = source_id
         if person_id:
             payload["person_id"] = person_id
-        if self.type_ids.get("Residencial"):
-            payload["lead_type_id"] = self.type_ids["Residencial"]
+        if lead_type_id:
+            payload["lead_type_id"] = lead_type_id
 
-        # Expected close date: 30 days from now
+        # Expected close date: score-based (higher score = sooner close)
         from datetime import timedelta
+        close_days = 60 if score < 50 else (30 if score < 80 else 14)
         payload["expected_close_date"] = (
-            datetime.utcnow() + timedelta(days=30)
+            datetime.utcnow() + timedelta(days=close_days)
         ).strftime("%Y-%m-%d")
 
         try:
@@ -246,17 +293,17 @@ class CRMSync:
                 timeout=15,
             )
             if resp.status_code in (200, 201):
-                lead_id = resp.json().get("data", {}).get("id")
-                logger.info(f"  [OK] Lead creado: {title} (krayin_id={lead_id})")
-                return True
+                krayin_id = resp.json().get("data", {}).get("id")
+                logger.info(f"  [OK] Lead creado: {title} (krayin_id={krayin_id}, stage={lead_type_name})")
+                return krayin_id
             else:
                 logger.warning(
                     f"  [WARN] Lead fallido ({resp.status_code}): {title} — {resp.text[:200]}"
                 )
-                return False
+                return None
         except Exception as e:
             logger.error(f"  [ERROR] Lead creation: {e}")
-            return False
+            return None
 
     def sync(self):
         """Main sync loop — read unsynced leads and push to CRM."""
@@ -277,6 +324,16 @@ class CRMSync:
         try:
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
+
+            # Migration: add krayin_lead_id column if missing
+            try:
+                conn.execute("SELECT krayin_lead_id FROM consolidated_leads LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute(
+                    "ALTER TABLE consolidated_leads ADD COLUMN krayin_lead_id INTEGER"
+                )
+                conn.commit()
+
             cursor = conn.execute("""
                 SELECT address_key, address, city, agent_sources, lead_data
                 FROM consolidated_leads
@@ -305,7 +362,7 @@ class CRMSync:
             except (json.JSONDecodeError, TypeError):
                 lead_data = {}
 
-            ok = self._create_lead(
+            krayin_id = self._create_lead(
                 address_key=row["address_key"],
                 address=row["address"],
                 city=row["city"],
@@ -313,11 +370,11 @@ class CRMSync:
                 lead_data=lead_data,
             )
 
-            if ok:
+            if krayin_id:
                 try:
                     conn.execute(
-                        "UPDATE consolidated_leads SET crm_synced = 1 WHERE address_key = ?",
-                        (row["address_key"],)
+                        "UPDATE consolidated_leads SET crm_synced = 1, krayin_lead_id = ? WHERE address_key = ?",
+                        (krayin_id, row["address_key"])
                     )
                     conn.commit()
                     synced += 1

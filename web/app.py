@@ -298,6 +298,14 @@ def list_leads():
         LIMIT ? OFFSET ?
     """, params + [per_page, offset])
 
+    # Check if krayin_lead_id column exists
+    has_krayin_col = False
+    try:
+        c.execute("SELECT krayin_lead_id FROM consolidated_leads LIMIT 0")
+        has_krayin_col = True
+    except Exception:
+        pass
+
     import json as json_mod
     leads = []
     for row in c.fetchall():
@@ -324,6 +332,19 @@ def list_leads():
             'contact_phone': lead_data.get('contact_phone', ''),
             'contact_email': lead_data.get('contact_email', ''),
         }
+
+        # CRM sync status
+        if has_krayin_col:
+            c.execute(
+                "SELECT crm_synced, krayin_lead_id FROM consolidated_leads WHERE address_key = ?",
+                (lead['id'],)
+            )
+            crm_row = c.fetchone()
+            lead['crm_synced'] = bool(crm_row and crm_row[0])
+            lead['krayin_lead_id'] = crm_row[1] if crm_row else None
+        else:
+            lead['crm_synced'] = False
+            lead['krayin_lead_id'] = None
 
         # Check if user has contacted this lead
         c.execute("""
@@ -365,9 +386,9 @@ def get_lead(lead_id):
     """, (lead_id,))
 
     row = c.fetchone()
-    conn.close()
 
     if not row:
+        conn.close()
         return jsonify({"error": "Lead not found"}), 404
 
     row_dict = dict(row)
@@ -394,6 +415,21 @@ def get_lead(lead_id):
         'owner': lead_data.get('owner', ''),
         'scoring_reasons': scoring.get('reasons', []),
     }
+
+    # CRM sync status
+    try:
+        c.execute(
+            "SELECT crm_synced, krayin_lead_id FROM consolidated_leads WHERE address_key = ?",
+            (lead_id,)
+        )
+        crm_row = c.fetchone()
+        lead['crm_synced'] = bool(crm_row and crm_row[0])
+        lead['krayin_lead_id'] = crm_row[1] if crm_row else None
+    except Exception:
+        lead['crm_synced'] = False
+        lead['krayin_lead_id'] = None
+
+    conn.close()
 
     return jsonify(lead), 200
 
@@ -514,12 +550,26 @@ def get_stats():
     """, city_names + [f"%{a}%" for a in agent_names])
     by_city = {row[0]: row[1] for row in c.fetchall()}
 
+    # CRM synced count
+    crm_synced = 0
+    try:
+        c.execute(f"""
+            SELECT COUNT(*) FROM consolidated_leads
+            WHERE crm_synced = 1
+            AND city IN ({placeholders_cities})
+            AND ({or_agents})
+        """, city_names + [f"%{a}%" for a in agent_names])
+        crm_synced = c.fetchone()[0]
+    except Exception:
+        pass
+
     conn.close()
 
     return jsonify({
         "total_leads": total,
         "new_leads": new,
         "contacted_leads": contacted,
+        "crm_synced": crm_synced,
         "by_agent": by_agent,
         "by_city": by_city
     }), 200

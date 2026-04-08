@@ -123,7 +123,8 @@ class DeduplicationEngine:
                         last_updated   TEXT NOT NULL,
                         lead_data      TEXT NOT NULL,
                         notified       INTEGER DEFAULT 0,
-                        crm_synced     INTEGER DEFAULT 0
+                        crm_synced     INTEGER DEFAULT 0,
+                        krayin_lead_id INTEGER
                     )
                 """)
                 conn.execute("""
@@ -138,14 +139,18 @@ class DeduplicationEngine:
                     )
                 """)
                 conn.commit()
-                # Migration: add crm_synced column if missing
-                try:
-                    conn.execute(
-                        "ALTER TABLE consolidated_leads ADD COLUMN crm_synced INTEGER DEFAULT 0"
-                    )
-                    conn.commit()
-                except Exception:
-                    pass  # column already exists
+                # Migrations: add columns if missing
+                for col, col_def in [
+                    ("crm_synced", "INTEGER DEFAULT 0"),
+                    ("krayin_lead_id", "INTEGER"),
+                ]:
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE consolidated_leads ADD COLUMN {col} {col_def}"
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass  # column already exists
         except Exception as e:
             logger.debug(f"[Dedup] DB init: {e}")
 
