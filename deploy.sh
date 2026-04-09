@@ -299,12 +299,6 @@ KENVEOF"
         touch "${CRM_DIR}/storage/installed"
         chown ${APP_USER}:${APP_USER} "${CRM_DIR}/storage/installed"
 
-        # Instalar REST API
-        cd "${CRM_DIR}"
-        sudo -u "${APP_USER}" composer require krayin/rest-api 2>/dev/null || \
-            COMPOSER_ALLOW_SUPERUSER=1 composer require krayin/rest-api 2>/dev/null || true
-        sudo -u "${APP_USER}" php artisan krayin-rest-api:install 2>/dev/null || true
-
         # Create admin user if not exists (fallback — krayin-crm:install sometimes skips this)
         info "Creando usuario admin del CRM..."
         ADMIN_EMAIL_CRM=$(grep "KRAYIN_ADMIN_EMAIL" "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')
@@ -336,10 +330,19 @@ KENVEOF"
         sudo -u "${APP_USER}" php artisan route:clear 2>/dev/null || true
         sudo -u "${APP_USER}" php artisan view:clear 2>/dev/null || true
 
+        # Republish vendor assets (ensures fonts, CSS, JS are in public/)
+        sudo -u "${APP_USER}" php artisan vendor:publish --all --force 2>/dev/null || true
+        sudo -u "${APP_USER}" php artisan storage:link 2>/dev/null || true
+
         # Rebuild caches
         sudo -u "${APP_USER}" php artisan config:cache 2>/dev/null || true
         sudo -u "${APP_USER}" php artisan route:cache 2>/dev/null || true
         sudo -u "${APP_USER}" php artisan view:cache 2>/dev/null || true
+
+        # Set pipeline defaults (rotten_days prevents false red indicators)
+        mysql -u root -e "
+            UPDATE krayin_crm.lead_pipelines SET rotten_days = 30, is_default = 1 WHERE id = 1;
+        " 2>/dev/null || true
 
         # Permisos — owner is app user, but www-data (PHP-FPM) needs storage write access
         chown -R ${APP_USER}:${APP_USER} "${CRM_DIR}"
@@ -367,17 +370,32 @@ else
     sudo -u "${APP_USER}" composer install --no-dev --no-interaction 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan migrate --force 2>/dev/null || true
 
+    # Remove incompatible packages if present
+    sudo -u "${APP_USER}" composer remove krayin/rest-api --no-interaction 2>/dev/null || true
+    sudo -u "${APP_USER}" composer remove barryvdh/laravel-debugbar --no-interaction 2>/dev/null || true
+
     # Clear + rebuild caches
     sudo -u "${APP_USER}" php artisan cache:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan config:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan route:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan view:clear 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan event:clear 2>/dev/null || true
+
+    # Republish vendor assets (ensures fonts, CSS, JS are in public/)
+    sudo -u "${APP_USER}" php artisan vendor:publish --all --force 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan storage:link 2>/dev/null || true
+
     sudo -u "${APP_USER}" php artisan config:cache 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan route:cache 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan view:cache 2>/dev/null || true
 
     # Ensure installed marker exists
     touch "${CRM_DIR}/storage/installed"
+
+    # Fix pipeline defaults
+    mysql -u root -e "
+        UPDATE krayin_crm.lead_pipelines SET rotten_days = 30, is_default = 1 WHERE id = 1;
+    " 2>/dev/null || true
 
     # Ensure admin user exists
     ADMIN_EMAIL_CRM=$(grep "KRAYIN_ADMIN_EMAIL" "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')
@@ -538,11 +556,13 @@ else
     warn "Agentes NO iniciados — configura .env primero, luego: systemctl start insulleads"
 fi
 
-# ── Configurar CRM pipeline/sources ─────────────────────────
-info "Configurando pipeline CRM..."
+# ── Fix Kanban view (data + caches) ─────────────────────────
+info "Aplicando fix de Kanban..."
 cd "${APP_DIR}"
-sudo -u "${APP_USER}" ${PYTHON} utils/crm_setup.py 2>/dev/null || \
-    warn "CRM setup pendiente — ejecuta: sudo -u ${APP_USER} ${PYTHON} utils/crm_setup.py"
+if [ -f "utils/fix_kanban.sh" ]; then
+    bash utils/fix_kanban.sh 2>/dev/null || \
+        warn "Fix Kanban parcial — ejecuta manualmente: sudo bash utils/fix_kanban.sh"
+fi
 
 # ── Obtener IP del servidor ──────────────────────────────────
 SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
@@ -598,8 +618,8 @@ echo "  Reiniciar:         sudo systemctl restart insulleads"
 echo "  Detener:           sudo systemctl stop insulleads"
 echo ""
 echo "  Sync CRM manual:   sudo -u ${APP_USER} ${PYTHON} ${APP_DIR}/utils/crm_sync.py"
-echo "  Setup CRM:         sudo -u ${APP_USER} ${PYTHON} ${APP_DIR}/utils/crm_setup.py"
-echo "  Verificar CRM:     sudo -u ${APP_USER} ${PYTHON} ${APP_DIR}/utils/crm_setup.py --check"
+echo "  Fix Kanban:        sudo bash ${APP_DIR}/utils/fix_kanban.sh"
+echo "  Diagnostico:       sudo bash ${APP_DIR}/utils/diagnose.sh"
 echo ""
 echo "  Probar Telegram:   sudo -u ${APP_USER} ${PYTHON} ${APP_DIR}/main.py --test"
 echo "  Estadisticas:      sudo -u ${APP_USER} ${PYTHON} ${APP_DIR}/main.py --stats"
