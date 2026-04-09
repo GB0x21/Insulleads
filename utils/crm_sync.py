@@ -173,10 +173,18 @@ def _mysql_insert(creds: dict, query: str) -> int | None:
 
 
 def _escape(val: str) -> str:
-    """Basic MySQL string escaping."""
+    """MySQL string escaping for CLI insertion."""
     if val is None:
         return ""
-    return val.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+    return (
+        val.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "")
+        .replace("\x00", "")
+        .replace("\x1a", "")
+    )
 
 
 class CRMSync:
@@ -216,14 +224,9 @@ class CRMSync:
             logger.info(f"  Stages cargados: {list(self._stages.keys())}")
 
     def _resolve_stage_id(self, score: int) -> int | None:
-        """Map lead score to pipeline stage."""
+        """All new leads go to 'Nuevo' stage. Score is stored in description."""
         self._load_stages()
-        if score >= 80:
-            return self._stages.get("calificado") or self._stages.get("nuevo")
-        elif score >= 50:
-            return self._stages.get("contactado") or self._stages.get("nuevo")
-        else:
-            return self._stages.get("nuevo")
+        return self._stages.get("nuevo")
 
     def _resolve_source_id(self, agent_sources: str) -> int | None:
         """Map agent_sources string to source_id."""
@@ -338,7 +341,7 @@ class CRMSync:
         if cross_count and cross_count > 1:
             description_parts.append(f"Senales cruzadas: {cross_count} agentes")
 
-        description = "\\n".join(description_parts) if description_parts else ""
+        description = "\n".join(description_parts) if description_parts else ""
 
         # Map value
         lead_value = lead_data.get("value_float") or lead_data.get("assessed_value") or 0
