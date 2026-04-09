@@ -3,18 +3,17 @@
 utils/crm_sync.py — Sync leads from Insulleads SQLite → Krayin CRM
 
 Reads consolidated_leads where crm_synced=0, creates Person + Lead
-in Krayin CRM via REST API, then marks crm_synced=1.
+in Krayin CRM via direct MySQL insertion, then marks crm_synced=1.
 
 Designed to run every 5 minutes via systemd timer or cron:
     */5 * * * * /home/insulleads/Insulleads/venv/bin/python /home/insulleads/Insulleads/utils/crm_sync.py
 
 Requires:
-    KRAYIN_URL             — Base URL (e.g. http://localhost/crm)
-    KRAYIN_ADMIN_EMAIL     — Admin email
-    KRAYIN_ADMIN_PASSWORD  — Admin password
     DB_PATH                — SQLite path (default: data/leads.db)
 
-Configuration file (created by crm_setup.py):
+MySQL connection reads from Krayin's .env automatically.
+
+Configuration file (created by crm_setup.py or diagnose.sh):
     data/crm_config.json   — pipeline_id, source_ids, agent_to_source mapping
 """
 
@@ -23,9 +22,8 @@ import sys
 import json
 import sqlite3
 import logging
-import time
-import requests
-from datetime import datetime
+import subprocess
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Add project root to path
@@ -40,19 +38,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────
-KRAYIN_URL = os.getenv("KRAYIN_URL", "http://localhost")
-ADMIN_EMAIL = os.getenv("KRAYIN_ADMIN_EMAIL", "admin@example.com")
-ADMIN_PASSWORD = os.getenv("KRAYIN_ADMIN_PASSWORD", "admin123")
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
 BATCH_SIZE = int(os.getenv("CRM_SYNC_BATCH", "50"))
 
-API_BASE = f"{KRAYIN_URL.rstrip('/')}/api/v1"
+# Krayin CRM directory (for reading MySQL credentials from its .env)
+CRM_DIR = os.getenv("CRM_DIR", "/home/insulleads/krayin-crm")
 
 # ── Load CRM config (created by crm_setup.py) ──────────────────
 CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data", "crm_config.json"
 )
+
+# Agent key → source name mapping
+AGENT_TO_SOURCE = {
+    "permits":        "Permisos de Construccion",
+    "solar":          "Solar",
+    "rodents":        "Plagas/Roedores",
+    "flood":          "Inundacion",
+    "construction":   "Construccion Activa",
+    "realestate":     "Inmobiliaria",
+    "energy":         "Energia",
+    "places":         "Google Places",
+    "yelp":           "Yelp",
+    "deconstruction": "Demolicion",
+}
 
 
 def _load_config() -> dict:
@@ -64,73 +74,150 @@ def _load_config() -> dict:
         return json.load(f)
 
 
+def _read_krayin_env() -> dict:
+    """Read MySQL credentials from Krayin's .env file."""
+    env_path = os.path.join(CRM_DIR, ".env")
+    creds = {
+        "host": "127.0.0.1",
+        "port": "3306",
+        "database": "krayin_crm",
+        "user": "krayin",
+        "password": "",
+    }
+    if not os.path.exists(env_path):
+        logger.warning(f"Krayin .env no encontrado: {env_path}")
+        return creds
+
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip("'\"")
+            if key == "DB_HOST":
+                creds["host"] = val
+            elif key == "DB_PORT":
+                creds["port"] = val
+            elif key == "DB_DATABASE":
+                creds["database"] = val
+            elif key == "DB_USERNAME":
+                creds["user"] = val
+            elif key == "DB_PASSWORD":
+                creds["password"] = val
+    return creds
+
+
+def _mysql_query(creds: dict, query: str, params: tuple = ()) -> list[dict]:
+    """Execute a MySQL query using the mysql CLI and return results as dicts."""
+    # For simple queries, use mysql CLI to avoid PyMySQL dependency
+    cmd = [
+        "mysql",
+        f"-u{creds['user']}",
+        f"-p{creds['password']}",
+        f"-h{creds['host']}",
+        f"-P{creds['port']}",
+        creds["database"],
+        "-e", query,
+        "-sN",  # silent, no headers
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.debug(f"MySQL error: {result.stderr[:200]}")
+            return []
+        rows = []
+        for line in result.stdout.strip().split("\n"):
+            if line:
+                rows.append(line.split("\t"))
+        return rows
+    except Exception as e:
+        logger.error(f"MySQL exec error: {e}")
+        return []
+
+
+def _mysql_insert(creds: dict, query: str) -> int | None:
+    """Execute a MySQL INSERT and return the last insert ID."""
+    full_query = f"{query}; SELECT LAST_INSERT_ID();"
+    cmd = [
+        "mysql",
+        f"-u{creds['user']}",
+        f"-p{creds['password']}",
+        f"-h{creds['host']}",
+        f"-P{creds['port']}",
+        creds["database"],
+        "-e", full_query,
+        "-sN",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.debug(f"MySQL insert error: {result.stderr[:200]}")
+            return None
+        lines = result.stdout.strip().split("\n")
+        if lines:
+            last_id = lines[-1].strip()
+            if last_id.isdigit():
+                return int(last_id)
+        return None
+    except Exception as e:
+        logger.error(f"MySQL insert error: {e}")
+        return None
+
+
+def _escape(val: str) -> str:
+    """Basic MySQL string escaping."""
+    if val is None:
+        return ""
+    return val.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+
+
 class CRMSync:
-    """Synchronize leads from SQLite to Krayin CRM."""
+    """Synchronize leads from SQLite to Krayin CRM via direct MySQL."""
 
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        })
-        self.token = None
         self.config = _load_config()
         self.pipeline_id = self.config.get("pipeline_id")
         self.source_ids = self.config.get("source_ids", {})
-        self.agent_to_source = self.config.get("agent_to_source", {})
+        self.agent_to_source = self.config.get("agent_to_source", AGENT_TO_SOURCE)
         self.type_ids = self.config.get("type_ids", {})
-        self._person_cache = {}  # email/phone → person_id
         self._stages = {}  # code → stage_id
+        self._person_cache = {}  # name → person_id
+        self.creds = _read_krayin_env()
 
-    def authenticate(self) -> bool:
-        """Get Sanctum bearer token."""
-        try:
-            resp = self.session.post(
-                f"{API_BASE}/admin/login",
-                json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                self.token = data.get("token") or data.get("data", {}).get("token")
-                if self.token:
-                    self.session.headers["Authorization"] = f"Bearer {self.token}"
-                    return True
-            logger.error(f"Login fallido: {resp.status_code}")
-            return False
-        except requests.ConnectionError:
-            logger.error(f"No se puede conectar a {API_BASE}")
-            return False
-        except Exception as e:
-            logger.error(f"Auth error: {e}")
-            return False
+    def _test_mysql(self) -> bool:
+        """Test MySQL connectivity."""
+        rows = _mysql_query(self.creds, "SELECT 1")
+        if rows:
+            logger.info("Conectado a MySQL (Krayin CRM)")
+            return True
+        logger.error("No se puede conectar a MySQL")
+        return False
 
     def _load_stages(self):
-        """Load all pipeline stages into a code→id map."""
+        """Load pipeline stages from MySQL."""
         if self._stages:
             return
+        rows = _mysql_query(
+            self.creds,
+            f"SELECT id, code FROM lead_pipeline_stages WHERE lead_pipeline_id={self.pipeline_id}"
+        )
+        for row in rows:
+            if len(row) >= 2:
+                self._stages[row[1]] = int(row[0])
+        if self._stages:
+            logger.info(f"  Stages cargados: {list(self._stages.keys())}")
 
-        try:
-            resp = self.session.get(
-                f"{API_BASE}/settings/pipelines/{self.pipeline_id}",
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data = resp.json().get("data", {})
-                for stage in data.get("stages", []):
-                    code = stage.get("code", "")
-                    self._stages[code] = stage["id"]
-        except Exception as e:
-            logger.debug(f"Error loading stages: {e}")
-
-    def _resolve_stage_id(self, score: int, contacted: bool = False) -> int | None:
-        """Map lead score + status to the appropriate pipeline stage."""
+    def _resolve_stage_id(self, score: int) -> int | None:
+        """Map lead score to pipeline stage."""
         self._load_stages()
-
-        if contacted:
-            return self._stages.get("contactado") or self._stages.get("nuevo")
-
-        # Score-based stage assignment
         if score >= 80:
             return self._stages.get("calificado") or self._stages.get("nuevo")
         elif score >= 50:
@@ -139,56 +226,15 @@ class CRMSync:
             return self._stages.get("nuevo")
 
     def _resolve_source_id(self, agent_sources: str) -> int | None:
-        """Map agent_sources string to Krayin source_id."""
+        """Map agent_sources string to source_id."""
         primary_agent = agent_sources.split(",")[0].strip()
         source_name = self.agent_to_source.get(primary_agent)
         if source_name:
             return self.source_ids.get(source_name)
         return None
 
-    def _find_or_create_person(self, lead_data: dict) -> int | None:
-        """Find or create a Person (contractor/owner) in Krayin."""
-        name = (
-            lead_data.get("contractor")
-            or lead_data.get("owner")
-            or "Propietario Desconocido"
-        )
-        email = lead_data.get("contact_email")
-        phone = lead_data.get("contact_phone")
-
-        # Check cache
-        cache_key = email or phone or name
-        if cache_key in self._person_cache:
-            return self._person_cache[cache_key]
-
-        # Build person payload
-        payload = {"name": name[:100]}
-        if email:
-            payload["emails"] = [{"value": email, "label": "work"}]
-        if phone:
-            payload["contact_numbers"] = [{"value": phone, "label": "work"}]
-
-        try:
-            resp = self.session.post(
-                f"{API_BASE}/contacts/persons",
-                json=payload,
-                timeout=15,
-            )
-            if resp.status_code in (200, 201):
-                person_id = resp.json().get("data", {}).get("id")
-                if person_id:
-                    self._person_cache[cache_key] = person_id
-                    return person_id
-            elif resp.status_code == 422:
-                # Person might already exist — try to search
-                logger.debug(f"Person 422: {resp.text[:200]}")
-        except Exception as e:
-            logger.debug(f"Person creation error: {e}")
-
-        return None
-
-    def _detect_lead_type(self, lead_data: dict, agent_sources: str) -> str:
-        """Detect lead type from data and source agents."""
+    def _detect_lead_type(self, lead_data: dict) -> str:
+        """Detect lead type from data."""
         desc = (lead_data.get("description") or "").lower()
         permit = (lead_data.get("permit_type") or "").lower()
         combined = f"{desc} {permit}"
@@ -201,13 +247,63 @@ class CRMSync:
             return "Industrial"
         return "Residencial"
 
+    def _find_or_create_person(self, lead_data: dict) -> int | None:
+        """Find or create a Person in Krayin via MySQL."""
+        name = (
+            lead_data.get("contractor")
+            or lead_data.get("owner")
+            or "Propietario Desconocido"
+        )[:100]
+
+        # Check cache
+        if name in self._person_cache:
+            return self._person_cache[name]
+
+        # Check if person already exists
+        rows = _mysql_query(
+            self.creds,
+            f"SELECT id FROM persons WHERE name='{_escape(name)}' LIMIT 1"
+        )
+        if rows and rows[0]:
+            pid = int(rows[0][0])
+            self._person_cache[name] = pid
+            return pid
+
+        # Create person
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        pid = _mysql_insert(
+            self.creds,
+            f"INSERT INTO persons (name, created_at, updated_at) VALUES ('{_escape(name)}', '{now}', '{now}')"
+        )
+        if pid:
+            self._person_cache[name] = pid
+
+            # Add email if available
+            email = lead_data.get("contact_email")
+            if email:
+                _mysql_insert(
+                    self.creds,
+                    f"INSERT INTO person_emails (person_id, value, label) VALUES ({pid}, '{_escape(email)}', 'work')"
+                )
+
+            # Add phone if available
+            phone = lead_data.get("contact_phone")
+            if phone:
+                _mysql_insert(
+                    self.creds,
+                    f"INSERT INTO person_phones (person_id, value, label) VALUES ({pid}, '{_escape(phone)}', 'work')"
+                )
+
+        return pid
+
     def _create_lead(self, address_key: str, address: str, city: str,
                      agent_sources: str, lead_data: dict) -> int | None:
-        """Create a Lead in Krayin CRM. Returns krayin_lead_id or None."""
+        """Create a Lead in Krayin CRM via MySQL. Returns krayin_lead_id or None."""
         title = f"{address} — {city}"
         if len(title) > 120:
             title = title[:120]
 
+        # Build description
         description_parts = []
         if lead_data.get("description"):
             description_parts.append(lead_data["description"][:500])
@@ -221,7 +317,6 @@ class CRMSync:
             description_parts.append(f"Email: {lead_data['contact_email']}")
 
         # Source agents
-        from utils.crm_setup import AGENT_TO_SOURCE
         source_labels = []
         for ag in agent_sources.split(","):
             ag = ag.strip()
@@ -243,7 +338,7 @@ class CRMSync:
         if cross_count and cross_count > 1:
             description_parts.append(f"Senales cruzadas: {cross_count} agentes")
 
-        description = "\n".join(description_parts) if description_parts else ""
+        description = "\\n".join(description_parts) if description_parts else ""
 
         # Map value
         lead_value = lead_data.get("value_float") or lead_data.get("assessed_value") or 0
@@ -258,52 +353,50 @@ class CRMSync:
         person_id = self._find_or_create_person(lead_data)
 
         # Detect lead type
-        lead_type_name = self._detect_lead_type(lead_data, agent_sources)
+        lead_type_name = self._detect_lead_type(lead_data)
         lead_type_id = self.type_ids.get(lead_type_name) or self.type_ids.get("Residencial")
 
-        # Build lead payload
-        payload = {
-            "title": title,
-            "description": description,
-            "lead_value": lead_value,
-            "status": 1,
-            "lead_pipeline_id": self.pipeline_id,
-        }
+        # Expected close date
+        close_days = 60 if score < 50 else (30 if score < 80 else 14)
+        close_date = (datetime.utcnow() + timedelta(days=close_days)).strftime("%Y-%m-%d")
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Build INSERT
+        fields = ["title", "description", "lead_value", "status",
+                   "lead_pipeline_id", "expected_close_date", "created_at", "updated_at"]
+        values = [
+            f"'{_escape(title)}'",
+            f"'{_escape(description)}'",
+            str(lead_value),
+            "1",
+            str(self.pipeline_id),
+            f"'{close_date}'",
+            f"'{now}'",
+            f"'{now}'",
+        ]
 
         if stage_id:
-            payload["lead_pipeline_stage_id"] = stage_id
+            fields.append("lead_pipeline_stage_id")
+            values.append(str(stage_id))
         if source_id:
-            payload["lead_source_id"] = source_id
+            fields.append("lead_source_id")
+            values.append(str(source_id))
         if person_id:
-            payload["person_id"] = person_id
+            fields.append("person_id")
+            values.append(str(person_id))
         if lead_type_id:
-            payload["lead_type_id"] = lead_type_id
+            fields.append("lead_type_id")
+            values.append(str(lead_type_id))
 
-        # Expected close date: score-based (higher score = sooner close)
-        from datetime import timedelta
-        close_days = 60 if score < 50 else (30 if score < 80 else 14)
-        payload["expected_close_date"] = (
-            datetime.utcnow() + timedelta(days=close_days)
-        ).strftime("%Y-%m-%d")
+        query = f"INSERT INTO leads ({', '.join(fields)}) VALUES ({', '.join(values)})"
+        krayin_id = _mysql_insert(self.creds, query)
 
-        try:
-            resp = self.session.post(
-                f"{API_BASE}/leads",
-                json=payload,
-                timeout=15,
-            )
-            if resp.status_code in (200, 201):
-                krayin_id = resp.json().get("data", {}).get("id")
-                logger.info(f"  [OK] Lead creado: {title} (krayin_id={krayin_id}, stage={lead_type_name})")
-                return krayin_id
-            else:
-                logger.warning(
-                    f"  [WARN] Lead fallido ({resp.status_code}): {title} — {resp.text[:200]}"
-                )
-                return None
-        except Exception as e:
-            logger.error(f"  [ERROR] Lead creation: {e}")
-            return None
+        if krayin_id:
+            logger.info(f"  [OK] Lead #{krayin_id}: {title} ({lead_type_name}, score={score})")
+        else:
+            logger.warning(f"  [WARN] Lead fallido: {title}")
+
+        return krayin_id
 
     def sync(self):
         """Main sync loop — read unsynced leads and push to CRM."""
@@ -314,10 +407,10 @@ class CRMSync:
             return
 
         if not self.pipeline_id:
-            logger.error("pipeline_id no configurado. Ejecuta: python utils/crm_setup.py")
+            logger.error("pipeline_id no configurado")
             return
 
-        if not self.authenticate():
+        if not self._test_mysql():
             return
 
         # Read unsynced leads from SQLite
@@ -383,9 +476,6 @@ class CRMSync:
                     failed += 1
             else:
                 failed += 1
-
-            # Rate limit: don't overwhelm the API
-            time.sleep(0.2)
 
         conn.close()
 
