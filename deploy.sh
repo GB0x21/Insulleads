@@ -292,22 +292,62 @@ KENVEOF"
         sudo -u "${APP_USER}" php artisan krayin-crm:install --force 2>/dev/null || \
             php artisan krayin-crm:install --force 2>/dev/null || true
 
+        # Mark as installed to prevent redirect to /install
+        touch "${CRM_DIR}/storage/installed"
+        chown ${APP_USER}:${APP_USER} "${CRM_DIR}/storage/installed"
+
         # Instalar REST API
         cd "${CRM_DIR}"
         sudo -u "${APP_USER}" composer require krayin/rest-api 2>/dev/null || \
             COMPOSER_ALLOW_SUPERUSER=1 composer require krayin/rest-api 2>/dev/null || true
         sudo -u "${APP_USER}" php artisan krayin-rest-api:install 2>/dev/null || true
 
+        # Create admin user if not exists (fallback — krayin-crm:install sometimes skips this)
+        info "Creando usuario admin del CRM..."
+        ADMIN_EMAIL_CRM=$(grep "KRAYIN_ADMIN_EMAIL" "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        ADMIN_PASS_CRM=$(grep "KRAYIN_ADMIN_PASSWORD" "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+        ADMIN_EMAIL_CRM=${ADMIN_EMAIL_CRM:-admin@example.com}
+        ADMIN_PASS_CRM=${ADMIN_PASS_CRM:-admin123}
+
+        # Ensure role exists
+        mysql -u root -e "
+            INSERT IGNORE INTO krayin_crm.roles (id, name, description, permission_type, created_at, updated_at)
+            VALUES (1, 'Administrator', 'Full access', 'all', NOW(), NOW());
+        " 2>/dev/null || true
+
+        # Create admin user via PHP (proper bcrypt hashing)
+        HASHED_PASS=$(php -r "echo password_hash('${ADMIN_PASS_CRM}', PASSWORD_BCRYPT);")
+        mysql -u root -e "
+            INSERT INTO krayin_crm.users (name, email, password, status, role_id, created_at, updated_at)
+            VALUES ('Admin', '${ADMIN_EMAIL_CRM}', '${HASHED_PASS}', 1, 1, NOW(), NOW())
+            ON DUPLICATE KEY UPDATE password='${HASHED_PASS}', status=1;
+        " 2>/dev/null && ok "Admin user creado: ${ADMIN_EMAIL_CRM}" || \
+            warn "Admin user ya existe o requiere creacion manual"
+
         # Optimizar para produccion
         sudo -u "${APP_USER}" composer install --no-dev --optimize-autoloader 2>/dev/null || true
+
+        # Clear all caches first (prevent stale routes/config)
+        sudo -u "${APP_USER}" php artisan cache:clear 2>/dev/null || true
+        sudo -u "${APP_USER}" php artisan config:clear 2>/dev/null || true
+        sudo -u "${APP_USER}" php artisan route:clear 2>/dev/null || true
+        sudo -u "${APP_USER}" php artisan view:clear 2>/dev/null || true
+
+        # Rebuild caches
         sudo -u "${APP_USER}" php artisan config:cache 2>/dev/null || true
         sudo -u "${APP_USER}" php artisan route:cache 2>/dev/null || true
         sudo -u "${APP_USER}" php artisan view:cache 2>/dev/null || true
 
-        # Permisos
+        # Permisos — owner is app user, but www-data (PHP-FPM) needs storage write access
         chown -R ${APP_USER}:${APP_USER} "${CRM_DIR}"
+        chown -R www-data:www-data "${CRM_DIR}/storage" 2>/dev/null || true
+        chown -R www-data:www-data "${CRM_DIR}/bootstrap/cache" 2>/dev/null || true
         chmod -R 775 "${CRM_DIR}/storage" 2>/dev/null || true
         chmod -R 775 "${CRM_DIR}/bootstrap/cache" 2>/dev/null || true
+
+        # Ensure www-data can traverse to CRM directory
+        chmod 755 /home/${APP_USER}
+        chmod 755 "${CRM_DIR}"
 
         ok "Krayin CRM instalado en ${CRM_DIR}"
     else
@@ -319,8 +359,43 @@ else
     cd "${CRM_DIR}"
     sudo -u "${APP_USER}" composer update --no-dev 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan migrate --force 2>/dev/null || true
+
+    # Clear + rebuild caches
+    sudo -u "${APP_USER}" php artisan cache:clear 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan config:clear 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan route:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan config:cache 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan route:cache 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan view:cache 2>/dev/null || true
+
+    # Ensure installed marker exists
+    touch "${CRM_DIR}/storage/installed"
+
+    # Ensure admin user exists
+    ADMIN_EMAIL_CRM=$(grep "KRAYIN_ADMIN_EMAIL" "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+    ADMIN_PASS_CRM=$(grep "KRAYIN_ADMIN_PASSWORD" "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+    ADMIN_EMAIL_CRM=${ADMIN_EMAIL_CRM:-admin@example.com}
+    ADMIN_PASS_CRM=${ADMIN_PASS_CRM:-admin123}
+    HASHED_PASS=$(php -r "echo password_hash('${ADMIN_PASS_CRM}', PASSWORD_BCRYPT);")
+    mysql -u root -e "
+        INSERT IGNORE INTO krayin_crm.roles (id, name, description, permission_type, created_at, updated_at)
+        VALUES (1, 'Administrator', 'Full access', 'all', NOW(), NOW());
+    " 2>/dev/null || true
+    mysql -u root -e "
+        INSERT INTO krayin_crm.users (name, email, password, status, role_id, created_at, updated_at)
+        VALUES ('Admin', '${ADMIN_EMAIL_CRM}', '${HASHED_PASS}', 1, 1, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE password='${HASHED_PASS}', status=1;
+    " 2>/dev/null || true
+
+    # Fix permissions for PHP-FPM (www-data)
     chown -R ${APP_USER}:${APP_USER} "${CRM_DIR}"
+    chown -R www-data:www-data "${CRM_DIR}/storage" 2>/dev/null || true
+    chown -R www-data:www-data "${CRM_DIR}/bootstrap/cache" 2>/dev/null || true
+    chmod -R 775 "${CRM_DIR}/storage" 2>/dev/null || true
+    chmod -R 775 "${CRM_DIR}/bootstrap/cache" 2>/dev/null || true
+    chmod 755 /home/${APP_USER}
+    chmod 755 "${CRM_DIR}"
+
     ok "Krayin CRM actualizado"
     cd "${APP_DIR}"
 fi
