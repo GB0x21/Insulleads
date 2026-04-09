@@ -144,18 +144,17 @@ mysql -u root -e "
 echo ""
 
 # ── 4. Fix leads — all active leads to Nuevo ─────────────────
-info "[4/8] Moviendo todos los leads activos a 'Nuevo'..."
+info "[4/8] Moviendo todos los leads a 'Nuevo'..."
 
-LEAD_COUNT=$(mysql -u root -sN -e "SELECT COUNT(*) FROM krayin_crm.leads WHERE status = 1;" 2>/dev/null)
-info "  Leads activos encontrados: ${LEAD_COUNT}"
+LEAD_COUNT=$(mysql -u root -sN -e "SELECT COUNT(*) FROM krayin_crm.leads;" 2>/dev/null)
+info "  Leads totales encontrados: ${LEAD_COUNT}"
 
 mysql -u root -e "
     UPDATE krayin_crm.leads
     SET lead_pipeline_stage_id = ${NUEVO_ID},
-        lead_pipeline_id = ${PIPELINE_ID}
-    WHERE status = 1;
+        lead_pipeline_id = ${PIPELINE_ID};
 " 2>/dev/null
-ok "Todos los leads activos movidos a stage 'Nuevo' (${NUEVO_ID})"
+ok "Todos los leads movidos a stage 'Nuevo' (${NUEVO_ID})"
 
 # ── 5. Fix leads — ensure user_id is set ─────────────────────
 info "[5/8] Fijando user_id en todos los leads..."
@@ -169,6 +168,29 @@ mysql -u root -e "
     WHERE user_id IS NULL;
 " 2>/dev/null
 ok "user_id = ${ADMIN_ID} asignado a todos los leads sin usuario"
+
+# Ensure all leads have a person (required for Kanban card rendering)
+info "  Asignando persona a leads sin persona..."
+PERSON_ID=$(mysql -u root -sN -e "SELECT id FROM krayin_crm.persons ORDER BY id LIMIT 1;" 2>/dev/null)
+if [ -z "${PERSON_ID}" ]; then
+    PERSON_ID=$(mysql -u root -sN -e "
+        INSERT INTO krayin_crm.persons (name, created_at, updated_at)
+        VALUES ('Propietario', NOW(), NOW());
+        SELECT LAST_INSERT_ID();
+    " 2>/dev/null | tail -1)
+fi
+if [ -n "${PERSON_ID}" ]; then
+    mysql -u root -e "UPDATE krayin_crm.leads SET person_id = ${PERSON_ID} WHERE person_id IS NULL;" 2>/dev/null
+    ok "person_id asignado a leads sin persona"
+fi
+
+# Ensure all leads have a source (required for Kanban card rendering)
+info "  Asignando fuente a leads sin fuente..."
+SOURCE_ID=$(mysql -u root -sN -e "SELECT id FROM krayin_crm.lead_sources ORDER BY id LIMIT 1;" 2>/dev/null)
+if [ -n "${SOURCE_ID}" ]; then
+    mysql -u root -e "UPDATE krayin_crm.leads SET lead_source_id = ${SOURCE_ID} WHERE lead_source_id IS NULL;" 2>/dev/null
+    ok "lead_source_id asignado a leads sin fuente"
+fi
 
 # ── 6. Verify lead data integrity ────────────────────────────
 info "[6/8] Verificando integridad de datos..."

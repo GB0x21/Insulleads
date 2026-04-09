@@ -129,7 +129,7 @@ def _mysql_query(creds: dict, query: str, params: tuple = ()) -> list[dict]:
             cmd, capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
-            logger.debug(f"MySQL error: {result.stderr[:200]}")
+            logger.warning(f"MySQL query error: {result.stderr[:200]}")
             return []
         rows = []
         for line in result.stdout.strip().split("\n"):
@@ -159,7 +159,7 @@ def _mysql_insert(creds: dict, query: str) -> int | None:
             cmd, capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
-            logger.debug(f"MySQL insert error: {result.stderr[:200]}")
+            logger.warning(f"MySQL insert error: {result.stderr[:200]}")
             return None
         lines = result.stdout.strip().split("\n")
         if lines:
@@ -227,6 +227,35 @@ class CRMSync:
         """All new leads go to 'Nuevo' stage. Score is stored in description."""
         self._load_stages()
         return self._stages.get("nuevo")
+
+    def _get_default_person_id(self) -> int:
+        """Get or create a default person for leads without a specific contact."""
+        if hasattr(self, '_default_person_id') and self._default_person_id:
+            return self._default_person_id
+        # Check if default person exists
+        rows = _mysql_query(
+            self.creds,
+            "SELECT id FROM persons WHERE name='Propietario' LIMIT 1"
+        )
+        if rows and rows[0]:
+            self._default_person_id = int(rows[0][0])
+            return self._default_person_id
+        # Create default person
+        now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
+        pid = _mysql_insert(
+            self.creds,
+            f"INSERT INTO persons (name, created_at, updated_at) VALUES ('Propietario', '{now}', '{now}')"
+        )
+        self._default_person_id = pid or 1
+        return self._default_person_id
+
+    def _get_default_source_id(self) -> int:
+        """Get the first available lead source as fallback."""
+        if hasattr(self, '_default_source_id') and self._default_source_id:
+            return self._default_source_id
+        rows = _mysql_query(self.creds, "SELECT id FROM lead_sources ORDER BY id LIMIT 1")
+        self._default_source_id = int(rows[0][0]) if rows and rows[0] else 1
+        return self._default_source_id
 
     def _resolve_source_id(self, agent_sources: str) -> int | None:
         """Map agent_sources string to source_id."""
@@ -350,10 +379,10 @@ class CRMSync:
         except (ValueError, TypeError):
             lead_value = 0
 
-        # Resolve IDs
-        source_id = self._resolve_source_id(agent_sources)
-        stage_id = self._resolve_stage_id(score)
-        person_id = self._find_or_create_person(lead_data)
+        # Resolve IDs (always required for Kanban rendering)
+        source_id = self._resolve_source_id(agent_sources) or self._get_default_source_id()
+        stage_id = self._resolve_stage_id(score) or 1
+        person_id = self._find_or_create_person(lead_data) or self._get_default_person_id()
 
         # Detect lead type
         lead_type_name = self._detect_lead_type(lead_data)
@@ -369,9 +398,11 @@ class CRMSync:
             rows = _mysql_query(self.creds, "SELECT id FROM users ORDER BY id LIMIT 1")
             self._admin_user_id = int(rows[0][0]) if rows and rows[0] else 1
 
-        # Build INSERT
+        # Build INSERT — all relationship fields are required for Kanban display
         fields = ["title", "description", "lead_value", "status",
-                   "lead_pipeline_id", "expected_close_date", "user_id",
+                   "lead_pipeline_id", "lead_pipeline_stage_id",
+                   "lead_source_id", "person_id", "lead_type_id",
+                   "expected_close_date", "user_id",
                    "created_at", "updated_at"]
         values = [
             f"'{_escape(title)}'",
@@ -379,24 +410,15 @@ class CRMSync:
             str(lead_value),
             "1",
             str(self.pipeline_id),
+            str(stage_id),
+            str(source_id),
+            str(person_id),
+            str(lead_type_id or 1),
             f"'{close_date}'",
             str(self._admin_user_id),
             f"'{now}'",
             f"'{now}'",
         ]
-
-        if stage_id:
-            fields.append("lead_pipeline_stage_id")
-            values.append(str(stage_id))
-        if source_id:
-            fields.append("lead_source_id")
-            values.append(str(source_id))
-        if person_id:
-            fields.append("person_id")
-            values.append(str(person_id))
-        if lead_type_id:
-            fields.append("lead_type_id")
-            values.append(str(lead_type_id))
 
         query = f"INSERT INTO leads ({', '.join(fields)}) VALUES ({', '.join(values)})"
         krayin_id = _mysql_insert(self.creds, query)
