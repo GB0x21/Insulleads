@@ -270,7 +270,7 @@ class CRMSync:
             return pid
 
         # Create person
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
         pid = _mysql_insert(
             self.creds,
             f"INSERT INTO persons (name, created_at, updated_at) VALUES ('{_escape(name)}', '{now}', '{now}')"
@@ -358,12 +358,18 @@ class CRMSync:
 
         # Expected close date
         close_days = 60 if score < 50 else (30 if score < 80 else 14)
-        close_date = (datetime.utcnow() + timedelta(days=close_days)).strftime("%Y-%m-%d")
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
+        close_date = (datetime.now(tz=None) + timedelta(days=close_days)).strftime("%Y-%m-%d")
+
+        # Resolve admin user_id (owner of the lead)
+        if not hasattr(self, '_admin_user_id'):
+            rows = _mysql_query(self.creds, "SELECT id FROM users ORDER BY id LIMIT 1")
+            self._admin_user_id = int(rows[0][0]) if rows and rows[0] else 1
 
         # Build INSERT
         fields = ["title", "description", "lead_value", "status",
-                   "lead_pipeline_id", "expected_close_date", "created_at", "updated_at"]
+                   "lead_pipeline_id", "expected_close_date", "user_id",
+                   "created_at", "updated_at"]
         values = [
             f"'{_escape(title)}'",
             f"'{_escape(description)}'",
@@ -371,6 +377,7 @@ class CRMSync:
             "1",
             str(self.pipeline_id),
             f"'{close_date}'",
+            str(self._admin_user_id),
             f"'{now}'",
             f"'{now}'",
         ]
