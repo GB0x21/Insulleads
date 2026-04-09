@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
-BATCH_SIZE = int(os.getenv("CRM_SYNC_BATCH", "50"))
+BATCH_SIZE = int(os.getenv("CRM_SYNC_BATCH", "600"))
 
 # Krayin CRM directory (for reading MySQL credentials from its .env)
 CRM_DIR = os.getenv("CRM_DIR", "/home/insulleads/krayin-crm")
@@ -240,11 +240,12 @@ class CRMSync:
         if rows and rows[0]:
             self._default_person_id = int(rows[0][0])
             return self._default_person_id
-        # Create default person
+        # Create default person (emails is NOT NULL json column)
         now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
         pid = _mysql_insert(
             self.creds,
-            f"INSERT INTO persons (name, created_at, updated_at) VALUES ('Propietario', '{now}', '{now}')"
+            f"INSERT INTO persons (name, emails, contact_numbers, created_at, updated_at) "
+            f"VALUES ('Propietario', '[]', '[]', '{now}', '{now}')"
         )
         self._default_person_id = pid or 1
         return self._default_person_id
@@ -280,7 +281,11 @@ class CRMSync:
         return "Residencial"
 
     def _find_or_create_person(self, lead_data: dict) -> int | None:
-        """Find or create a Person in Krayin via MySQL."""
+        """Find or create a Person in Krayin via MySQL.
+
+        The persons table requires: name (varchar), emails (json NOT NULL),
+        contact_numbers (json), created_at, updated_at.
+        """
         name = (
             lead_data.get("contractor")
             or lead_data.get("owner")
@@ -301,30 +306,32 @@ class CRMSync:
             self._person_cache[name] = pid
             return pid
 
-        # Create person
+        # Build emails JSON array (required NOT NULL column)
+        email = lead_data.get("contact_email")
+        if email:
+            emails_json = f'[{{"value": "{_escape(email)}", "label": "work"}}]'
+        else:
+            emails_json = "[]"
+
+        # Build contact_numbers JSON array
+        phone = lead_data.get("contact_phone")
+        if phone:
+            phones_json = f'[{{"value": "{_escape(phone)}", "label": "work"}}]'
+        else:
+            phones_json = "[]"
+
+        # Create person with required JSON columns
         now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
         pid = _mysql_insert(
             self.creds,
-            f"INSERT INTO persons (name, created_at, updated_at) VALUES ('{_escape(name)}', '{now}', '{now}')"
+            f"INSERT INTO persons (name, emails, contact_numbers, created_at, updated_at) "
+            f"VALUES ('{_escape(name)}', '{emails_json}', '{phones_json}', '{now}', '{now}')"
         )
         if pid:
             self._person_cache[name] = pid
-
-            # Add email if available
-            email = lead_data.get("contact_email")
-            if email:
-                _mysql_insert(
-                    self.creds,
-                    f"INSERT INTO person_emails (person_id, value, label) VALUES ({pid}, '{_escape(email)}', 'work')"
-                )
-
-            # Add phone if available
-            phone = lead_data.get("contact_phone")
-            if phone:
-                _mysql_insert(
-                    self.creds,
-                    f"INSERT INTO person_phones (person_id, value, label) VALUES ({pid}, '{_escape(phone)}', 'work')"
-                )
+            logger.info(f"  Persona creada: {name} (ID={pid})")
+        else:
+            logger.warning(f"  No se pudo crear persona: {name}")
 
         return pid
 
