@@ -148,11 +148,14 @@ fi
 info "[8/16] Obteniendo codigo..."
 if [ "${IS_UPDATE}" = true ]; then
     cd "${APP_DIR}"
-    # Guardar cambios locales si existen
+    # Detect current branch and update from it
+    CURRENT_BRANCH=$(sudo -u "${APP_USER}" git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "${BRANCH}")
     sudo -u "${APP_USER}" git stash 2>/dev/null || true
-    sudo -u "${APP_USER}" git pull origin "${BRANCH}" || true
+    sudo -u "${APP_USER}" git fetch origin "${CURRENT_BRANCH}" 2>/dev/null || true
+    sudo -u "${APP_USER}" git reset --hard "origin/${CURRENT_BRANCH}" 2>/dev/null || \
+        sudo -u "${APP_USER}" git pull --rebase origin "${CURRENT_BRANCH}" 2>/dev/null || true
     sudo -u "${APP_USER}" git stash pop 2>/dev/null || true
-    ok "Codigo actualizado desde ${BRANCH}"
+    ok "Codigo actualizado desde ${CURRENT_BRANCH}"
 else
     sudo -u "${APP_USER}" git clone -b "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
     ok "Repositorio clonado"
@@ -357,13 +360,18 @@ KENVEOF"
 else
     # Actualizar Krayin
     cd "${CRM_DIR}"
-    sudo -u "${APP_USER}" composer update --no-dev 2>/dev/null || true
+
+    # Temporarily give app user full ownership for artisan/composer commands
+    chown -R ${APP_USER}:${APP_USER} "${CRM_DIR}"
+
+    sudo -u "${APP_USER}" composer install --no-dev --no-interaction 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan migrate --force 2>/dev/null || true
 
     # Clear + rebuild caches
     sudo -u "${APP_USER}" php artisan cache:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan config:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan route:clear 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan view:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan config:cache 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan route:cache 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan view:cache 2>/dev/null || true
