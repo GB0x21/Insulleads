@@ -357,13 +357,18 @@ KENVEOF"
 else
     # Actualizar Krayin
     cd "${CRM_DIR}"
-    sudo -u "${APP_USER}" composer update --no-dev 2>/dev/null || true
+
+    # Temporarily give app user full ownership for artisan/composer commands
+    chown -R ${APP_USER}:${APP_USER} "${CRM_DIR}"
+
+    sudo -u "${APP_USER}" composer install --no-dev --no-interaction 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan migrate --force 2>/dev/null || true
 
     # Clear + rebuild caches
     sudo -u "${APP_USER}" php artisan cache:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan config:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan route:clear 2>/dev/null || true
+    sudo -u "${APP_USER}" php artisan view:clear 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan config:cache 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan route:cache 2>/dev/null || true
     sudo -u "${APP_USER}" php artisan view:cache 2>/dev/null || true
