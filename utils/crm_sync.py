@@ -521,7 +521,8 @@ class CRMSync:
                 SELECT address_key, address, city, agent_sources, lead_data
                 FROM consolidated_leads
                 WHERE crm_synced = 0
-                ORDER BY last_updated DESC
+                ORDER BY json_extract(lead_data, '$._scoring.score') DESC,
+                         last_updated DESC
                 LIMIT ?
             """, (BATCH_SIZE,))
             rows = cursor.fetchall()
