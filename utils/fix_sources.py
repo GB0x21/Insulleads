@@ -109,20 +109,54 @@ def main():
     """).fetchall()
     print(f"\nLeads sincronizados en SQLite: {len(rows)}")
 
-    # 3. Update each lead's source in Krayin
+    # 3. Create person per source type (for leads without contractor)
+    print("\nCreando personas por tipo de fuente...")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    person_ids = {}  # source_name → person_id
+    for agent_key, source_name in SOURCE_NAMES.items():
+        rows_p = mysql_exec(creds, f"SELECT id FROM persons WHERE name = '{_escape(source_name)}' LIMIT 1")
+        if rows_p and rows_p[0]:
+            person_ids[agent_key] = int(rows_p[0][0])
+        else:
+            mysql_exec(creds,
+                f"INSERT INTO persons (name, emails, contact_numbers, created_at, updated_at) "
+                f"VALUES ('{_escape(source_name)}', '[]', '[]', '{now}', '{now}'); SELECT LAST_INSERT_ID();")
+            rows_p = mysql_exec(creds, f"SELECT id FROM persons WHERE name = '{_escape(source_name)}' LIMIT 1")
+            if rows_p and rows_p[0]:
+                person_ids[agent_key] = int(rows_p[0][0])
+                print(f"  Persona creada: {source_name} (ID={person_ids[agent_key]})")
+
+    # 4. Update each lead's source AND person in Krayin
+    print("\nActualizando leads...")
     updated = 0
     for row in rows:
         agent_sources = row["agent_sources"] or ""
         krayin_id = row["krayin_lead_id"]
         primary_agent = agent_sources.split(",")[0].strip().lower()
         source_id = source_ids.get(primary_agent)
-        if source_id and krayin_id:
-            mysql_exec(creds, f"UPDATE leads SET lead_source_id = {source_id} WHERE id = {krayin_id}")
-            updated += 1
+        person_id = person_ids.get(primary_agent)
+
+        if krayin_id:
+            # Check if lead already has a real person (not default)
+            lead_rows = mysql_exec(creds,
+                f"SELECT p.name FROM leads l JOIN persons p ON l.person_id = p.id "
+                f"WHERE l.id = {krayin_id}")
+            current_person = lead_rows[0][0] if lead_rows and lead_rows[0] else ""
+
+            updates = []
+            if source_id:
+                updates.append(f"lead_source_id = {source_id}")
+            # Only update person if current is "Propietario Desconocido"
+            if person_id and current_person in ("Propietario Desconocido", ""):
+                updates.append(f"person_id = {person_id}")
+
+            if updates:
+                mysql_exec(creds, f"UPDATE leads SET {', '.join(updates)} WHERE id = {krayin_id}")
+                updated += 1
 
     print(f"Leads actualizados: {updated}")
 
-    # 4. Show distribution
+    # 5. Show distribution
     print("\nDistribucion por fuente:")
     dist = mysql_exec(creds, """
         SELECT s.name, COUNT(l.id)
@@ -132,6 +166,19 @@ def main():
         ORDER BY COUNT(l.id) DESC
     """)
     for row in dist:
+        if len(row) >= 2:
+            print(f"  {row[0]}: {row[1]} leads")
+
+    print("\nDistribucion por persona:")
+    dist2 = mysql_exec(creds, """
+        SELECT p.name, COUNT(l.id)
+        FROM leads l
+        JOIN persons p ON l.person_id = p.id
+        GROUP BY p.name
+        ORDER BY COUNT(l.id) DESC
+        LIMIT 15
+    """)
+    for row in dist2:
         if len(row) >= 2:
             print(f"  {row[0]}: {row[1]} leads")
 
