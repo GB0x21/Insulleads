@@ -333,16 +333,18 @@ class CRMSync:
             return "Industrial"
         return "Residencial"
 
-    def _find_or_create_person(self, lead_data: dict) -> int | None:
+    def _find_or_create_person(self, lead_data: dict, source_label: str = "") -> int | None:
         """Find or create a Person in Krayin via MySQL.
 
-        The persons table requires: name (varchar), emails (json NOT NULL),
-        contact_numbers (json), created_at, updated_at.
+        Uses contractor/owner name if available, otherwise uses the
+        source label (e.g. 'Solar', 'Demolicion') as the person name
+        so the Kanban card shows the lead type.
         """
         name = (
             lead_data.get("contractor")
             or lead_data.get("owner")
-            or "Propietario Desconocido"
+            or source_label
+            or "Lead"
         )[:100]
 
         # Check cache
@@ -442,7 +444,11 @@ class CRMSync:
         # Resolve IDs (always required for Kanban rendering)
         source_id = self._resolve_source_id(agent_sources) or self._get_default_source_id()
         stage_id = self._resolve_stage_id(score) or 1
-        person_id = self._find_or_create_person(lead_data) or self._get_default_person_id()
+
+        # Resolve source label for person name fallback
+        primary_agent = agent_sources.split(",")[0].strip().lower()
+        source_label = self.SOURCE_NAMES.get(primary_agent, "Lead")
+        person_id = self._find_or_create_person(lead_data, source_label) or self._get_default_person_id()
 
         # Detect lead type
         lead_type_name = self._detect_lead_type(lead_data)
