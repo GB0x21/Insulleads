@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
-BATCH_SIZE = int(os.getenv("CRM_SYNC_BATCH", "50"))
+BATCH_SIZE = int(os.getenv("CRM_SYNC_BATCH", "600"))
 
 # Krayin CRM directory (for reading MySQL credentials from its .env)
 CRM_DIR = os.getenv("CRM_DIR", "/home/insulleads/krayin-crm")
@@ -190,15 +190,28 @@ def _escape(val: str) -> str:
 class CRMSync:
     """Synchronize leads from SQLite to Krayin CRM via direct MySQL."""
 
+    # Agent key → display name for lead sources
+    SOURCE_NAMES = {
+        "permits":        "Permisos de Construccion",
+        "solar":          "Solar",
+        "rodents":        "Plagas/Roedores",
+        "flood":          "Inundacion",
+        "construction":   "Construccion Activa",
+        "realestate":     "Inmobiliaria",
+        "energy":         "Energia",
+        "places":         "Google Places",
+        "yelp":           "Yelp",
+        "deconstruction": "Demolicion",
+    }
+
     def __init__(self):
         self.config = _load_config()
-        self.pipeline_id = self.config.get("pipeline_id")
-        self.source_ids = self.config.get("source_ids", {})
-        self.agent_to_source = self.config.get("agent_to_source", AGENT_TO_SOURCE)
-        self.type_ids = self.config.get("type_ids", {})
-        self._stages = {}  # code → stage_id
-        self._person_cache = {}  # name → person_id
         self.creds = _read_krayin_env()
+        self._stages = {}
+        self._person_cache = {}
+        self._source_cache = {}  # source_name → id
+        self.pipeline_id = None
+        self.type_ids = {}
 
     def _test_mysql(self) -> bool:
         """Test MySQL connectivity."""
@@ -208,6 +221,49 @@ class CRMSync:
             return True
         logger.error("No se puede conectar a MySQL")
         return False
+
+    def _bootstrap(self) -> bool:
+        """Load pipeline, sources, and types from MySQL (not config file)."""
+        if not self._test_mysql():
+            return False
+
+        # Load pipeline
+        rows = _mysql_query(self.creds, "SELECT id FROM lead_pipelines WHERE is_default = 1 LIMIT 1")
+        if not rows or not rows[0]:
+            rows = _mysql_query(self.creds, "SELECT id FROM lead_pipelines ORDER BY id LIMIT 1")
+        self.pipeline_id = int(rows[0][0]) if rows and rows[0] else None
+        if not self.pipeline_id:
+            logger.error("No se encontro pipeline")
+            return False
+
+        # Load or create sources
+        for agent_key, source_name in self.SOURCE_NAMES.items():
+            rows = _mysql_query(
+                self.creds,
+                f"SELECT id FROM lead_sources WHERE name = '{_escape(source_name)}' LIMIT 1"
+            )
+            if rows and rows[0]:
+                self._source_cache[agent_key] = int(rows[0][0])
+            else:
+                now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
+                sid = _mysql_insert(
+                    self.creds,
+                    f"INSERT INTO lead_sources (name, created_at, updated_at) "
+                    f"VALUES ('{_escape(source_name)}', '{now}', '{now}')"
+                )
+                if sid:
+                    self._source_cache[agent_key] = sid
+                    logger.info(f"  Source creado: {source_name} (ID={sid})")
+
+        logger.info(f"  Sources cargados: {len(self._source_cache)}")
+
+        # Load types
+        rows = _mysql_query(self.creds, "SELECT id, name FROM lead_types")
+        for row in rows:
+            if len(row) >= 2:
+                self.type_ids[row[1]] = int(row[0])
+
+        return True
 
     def _load_stages(self):
         """Load pipeline stages from MySQL."""
@@ -240,11 +296,12 @@ class CRMSync:
         if rows and rows[0]:
             self._default_person_id = int(rows[0][0])
             return self._default_person_id
-        # Create default person
+        # Create default person (emails is NOT NULL json column)
         now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
         pid = _mysql_insert(
             self.creds,
-            f"INSERT INTO persons (name, created_at, updated_at) VALUES ('Propietario', '{now}', '{now}')"
+            f"INSERT INTO persons (name, emails, contact_numbers, created_at, updated_at) "
+            f"VALUES ('Propietario', '[]', '[]', '{now}', '{now}')"
         )
         self._default_person_id = pid or 1
         return self._default_person_id
@@ -258,12 +315,9 @@ class CRMSync:
         return self._default_source_id
 
     def _resolve_source_id(self, agent_sources: str) -> int | None:
-        """Map agent_sources string to source_id."""
-        primary_agent = agent_sources.split(",")[0].strip()
-        source_name = self.agent_to_source.get(primary_agent)
-        if source_name:
-            return self.source_ids.get(source_name)
-        return None
+        """Map agent_sources string to source_id from MySQL cache."""
+        primary_agent = agent_sources.split(",")[0].strip().lower()
+        return self._source_cache.get(primary_agent)
 
     def _detect_lead_type(self, lead_data: dict) -> str:
         """Detect lead type from data."""
@@ -280,7 +334,11 @@ class CRMSync:
         return "Residencial"
 
     def _find_or_create_person(self, lead_data: dict) -> int | None:
-        """Find or create a Person in Krayin via MySQL."""
+        """Find or create a Person in Krayin via MySQL.
+
+        The persons table requires: name (varchar), emails (json NOT NULL),
+        contact_numbers (json), created_at, updated_at.
+        """
         name = (
             lead_data.get("contractor")
             or lead_data.get("owner")
@@ -301,30 +359,32 @@ class CRMSync:
             self._person_cache[name] = pid
             return pid
 
-        # Create person
+        # Build emails JSON array (required NOT NULL column)
+        email = lead_data.get("contact_email")
+        if email:
+            emails_json = f'[{{"value": "{_escape(email)}", "label": "work"}}]'
+        else:
+            emails_json = "[]"
+
+        # Build contact_numbers JSON array
+        phone = lead_data.get("contact_phone")
+        if phone:
+            phones_json = f'[{{"value": "{_escape(phone)}", "label": "work"}}]'
+        else:
+            phones_json = "[]"
+
+        # Create person with required JSON columns
         now = datetime.now(tz=None).strftime("%Y-%m-%d %H:%M:%S")
         pid = _mysql_insert(
             self.creds,
-            f"INSERT INTO persons (name, created_at, updated_at) VALUES ('{_escape(name)}', '{now}', '{now}')"
+            f"INSERT INTO persons (name, emails, contact_numbers, created_at, updated_at) "
+            f"VALUES ('{_escape(name)}', '{emails_json}', '{phones_json}', '{now}', '{now}')"
         )
         if pid:
             self._person_cache[name] = pid
-
-            # Add email if available
-            email = lead_data.get("contact_email")
-            if email:
-                _mysql_insert(
-                    self.creds,
-                    f"INSERT INTO person_emails (person_id, value, label) VALUES ({pid}, '{_escape(email)}', 'work')"
-                )
-
-            # Add phone if available
-            phone = lead_data.get("contact_phone")
-            if phone:
-                _mysql_insert(
-                    self.creds,
-                    f"INSERT INTO person_phones (person_id, value, label) VALUES ({pid}, '{_escape(phone)}', 'work')"
-                )
+            logger.info(f"  Persona creada: {name} (ID={pid})")
+        else:
+            logger.warning(f"  No se pudo crear persona: {name}")
 
         return pid
 
@@ -434,15 +494,7 @@ class CRMSync:
         """Main sync loop — read unsynced leads and push to CRM."""
         logger.info("Iniciando sincronizacion...")
 
-        if not self.config:
-            logger.error("Sin configuracion. Ejecuta: python utils/crm_setup.py")
-            return
-
-        if not self.pipeline_id:
-            logger.error("pipeline_id no configurado")
-            return
-
-        if not self._test_mysql():
+        if not self._bootstrap():
             return
 
         # Read unsynced leads from SQLite

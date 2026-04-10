@@ -174,8 +174,8 @@ info "  Asignando persona a leads sin persona..."
 PERSON_ID=$(mysql -u root -sN -e "SELECT id FROM krayin_crm.persons ORDER BY id LIMIT 1;" 2>/dev/null)
 if [ -z "${PERSON_ID}" ]; then
     PERSON_ID=$(mysql -u root -sN -e "
-        INSERT INTO krayin_crm.persons (name, created_at, updated_at)
-        VALUES ('Propietario', NOW(), NOW());
+        INSERT INTO krayin_crm.persons (name, emails, contact_numbers, created_at, updated_at)
+        VALUES ('Propietario', '[]', '[]', NOW(), NOW());
         SELECT LAST_INSERT_ID();
     " 2>/dev/null | tail -1)
 fi
