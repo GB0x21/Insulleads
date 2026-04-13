@@ -13,6 +13,7 @@ import logging
 from django.conf import settings
 from django.utils import timezone
 
+from outreach.llm import get_adapter
 from outreach.models import ActionLog, Campaign, Lead, Task
 
 logger = logging.getLogger("outreach.tasks.outreach")
@@ -57,12 +58,34 @@ def _format_message(lead: Lead) -> str:
     return "\n".join(parts)
 
 
-def _send(lead: Lead) -> str:
+def _resolve_body(lead: Lead, campaign: Campaign) -> str:
+    """Pick an outreach body: cached LLM copy → fresh LLM copy → template."""
+    if lead.llm_outreach_body:
+        return lead.llm_outreach_body
+
+    if campaign.llm_writer_enabled:
+        adapter = get_adapter()
+        if adapter.name != "noop":
+            try:
+                body = adapter.write_outreach(lead, campaign)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[outreach] LLM writer failed for lead=%s: %s",
+                               lead.pk, exc)
+                body = None
+            if body:
+                lead.llm_outreach_body = body
+                lead.save(update_fields=["llm_outreach_body", "updated_at"])
+                return body
+
+    return _format_message(lead)
+
+
+def _send(lead: Lead, campaign: Campaign) -> str:
     """Send through the existing Insulleads notification stack.
     Returns the action name that was taken."""
     from utils.telegram import send_message
 
-    body = _format_message(lead)
+    body = _resolve_body(lead, campaign)
     ok = send_message(body)
     if not ok:
         raise RuntimeError("telegram send failed")
@@ -92,7 +115,7 @@ def handle(task: Task) -> None:
     sent = 0
     for lead in batch:
         try:
-            action = _send(lead)
+            action = _send(lead, campaign)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[outreach] failed for lead=%s: %s", lead.pk, exc)
             continue

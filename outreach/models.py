@@ -71,6 +71,21 @@ class Campaign(models.Model):
     positive_labels = models.PositiveIntegerField(default=0)
     negative_labels = models.PositiveIntegerField(default=0)
 
+    # LLM layer toggles (see outreach/llm/)
+    class Tone(models.TextChoices):
+        PROFESSIONAL = "professional", "Professional"
+        FRIENDLY = "friendly", "Friendly"
+        URGENT = "urgent", "Urgent"
+
+    outreach_tone = models.CharField(
+        max_length=16,
+        choices=Tone.choices,
+        default=Tone.PROFESSIONAL,
+    )
+    llm_enricher_enabled = models.BooleanField(default=True)
+    llm_qualifier_enabled = models.BooleanField(default=True)
+    llm_writer_enabled = models.BooleanField(default=True)
+
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -166,6 +181,11 @@ class Lead(models.Model):
     stage_changed_at = models.DateTimeField(default=timezone.now)
     raw = models.JSONField(default=dict, blank=True)
 
+    # LLM layer output cache (outreach/llm/)
+    enrichment_log = models.JSONField(default=dict, blank=True)
+    llm_qualification_reason = models.TextField(blank=True, default="")
+    llm_outreach_body = models.TextField(blank=True, default="")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -233,6 +253,7 @@ class Task(models.Model):
 
     class Type(models.TextChoices):
         DISCOVER = "discover", "Run discovery source"
+        ENRICH = "enrich", "LLM contact enrichment"
         QUALIFY = "qualify", "Qualify discovered leads"
         OUTREACH = "outreach", "Send outreach for a lead"
         FOLLOW_UP = "follow_up", "Follow up after N days"

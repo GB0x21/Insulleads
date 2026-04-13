@@ -30,10 +30,11 @@ logger = logging.getLogger("outreach.daemon")
 # ─── Task handler dispatch ─────────────────────────────────────────
 def _handlers() -> dict[str, Callable[[Task], None]]:
     # Imported lazily to avoid Django app-loading cycles.
-    from .tasks import discover, outreach, qualify
+    from .tasks import discover, enrich, outreach, qualify
 
     return {
         Task.Type.DISCOVER: discover.handle,
+        Task.Type.ENRICH: enrich.handle,
         Task.Type.QUALIFY: qualify.handle,
         Task.Type.OUTREACH: outreach.handle,
         Task.Type.FOLLOW_UP: outreach.handle_follow_up,
@@ -60,7 +61,10 @@ def ensure_periodic_tasks() -> None:
             logger.info("[seed] discover queued for source=%s", source.key)
 
     for campaign in Campaign.objects.filter(is_active=True):
-        for ttype in (Task.Type.QUALIFY, Task.Type.OUTREACH):
+        periodic = [Task.Type.QUALIFY, Task.Type.OUTREACH]
+        if campaign.llm_enricher_enabled:
+            periodic.append(Task.Type.ENRICH)
+        for ttype in periodic:
             if not Task.objects.filter(
                 type=ttype, campaign=campaign, status=Task.Status.PENDING
             ).exists():

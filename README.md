@@ -52,6 +52,10 @@ agent and starts the task-queue loop.
 | `make setup / run / admin / up`   | same targets, same semantics                            |
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full pipeline diagram.
+For the LLM layer (enrichment, cold-start qualifier, outreach copy) see
+the "LLM layer" section below and
+[`docs/SUNA_INTEGRATION.md`](docs/SUNA_INTEGRATION.md) for the optional
+Suna sidecar roadmap.
 
 ---
 
@@ -140,6 +144,41 @@ The `outreach` task reuses the existing Insulleads notification stack
 SendGrid / Twilio wiring from the original repo keeps working. Daily
 budget is enforced per-campaign via `Campaign.max_outreach_per_day`
 and tracked in `ActionLog`.
+
+---
+
+### LLM layer
+
+`outreach/llm/` adds three LLM-powered capabilities on top of the
+OpenOutreach pipeline. Everything goes through a single `LLMAdapter`
+ABC so the backend can be swapped with a single env var:
+
+| Feature            | Where it plugs in                     | What it replaces                               |
+|--------------------|---------------------------------------|------------------------------------------------|
+| Contact enrichment | `outreach/tasks/enrich.py` (periodic) | Fuzzy match against CSVs only                  |
+| Cold-start qualifier | `outreach/tasks/qualify.py` cold-start branch | Heuristic `lead_score` while GP has < 2 labels |
+| Outreach copy      | `outreach/tasks/outreach.py:_resolve_body` | Fixed `_format_message` template          |
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python manage.py test_llm --feature all
+```
+
+Supported backends (`LLM_ADAPTER` in `.env`):
+
+- `anthropic` *(default)* — uses the official `anthropic` SDK with
+  prompt caching on the campaign prefix and `web_search` for
+  enrichment. Falls back automatically to `noop` when the API key is
+  missing, so the daemon is still runnable on a fresh box.
+- `suna` — **stub** for running [Suna](https://github.com/kortix-ai/suna)
+  as a sidecar container. See [`docs/SUNA_INTEGRATION.md`](docs/SUNA_INTEGRATION.md)
+  for the integration playbook.
+- `noop` — disables the LLM layer entirely; the pipeline falls back
+  to the legacy template + heuristic qualifier.
+
+Per-campaign toggles (`Campaign.llm_enricher_enabled`,
+`llm_qualifier_enabled`, `llm_writer_enabled`, `outreach_tone`) are
+exposed in the Django admin.
 
 ---
 

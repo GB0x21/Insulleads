@@ -91,6 +91,7 @@ OUTREACH = {
     "DISCOVERY_INTERVAL_MIN": int(os.getenv("DISCOVERY_INTERVAL_MIN", "60")),
     "QUALIFY_INTERVAL_MIN": int(os.getenv("QUALIFY_INTERVAL_MIN", "15")),
     "OUTREACH_INTERVAL_MIN": int(os.getenv("OUTREACH_INTERVAL_MIN", "5")),
+    "ENRICH_INTERVAL_MIN": int(os.getenv("ENRICH_INTERVAL_MIN", "30")),
     "MAX_OUTREACH_PER_DAY": int(os.getenv("MAX_OUTREACH_PER_DAY", "200")),
     "SOURCES_ENABLED": [
         key for key in [
@@ -99,6 +100,21 @@ OUTREACH = {
             "energy", "places", "yelp",
         ] if os.getenv(f"AGENT_{key.upper()}", "true").lower() not in ("false", "0", "no")
     ],
+}
+
+# ─── LLM layer (outreach/llm/) ─────────────────────────────────────────
+# Adapter backend: "anthropic" (default), "suna" (stub — see
+# docs/SUNA_INTEGRATION.md) or "noop" (always safe fallback).
+_LLM_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+_LLM_ADAPTER = os.getenv("LLM_ADAPTER", "anthropic").lower()
+LLM = {
+    "ADAPTER": _LLM_ADAPTER,
+    "ENABLED": bool(_LLM_API_KEY) or _LLM_ADAPTER == "suna",
+    "ANTHROPIC_API_KEY": _LLM_API_KEY,
+    "MODEL": os.getenv("LLM_MODEL", "claude-opus-4-6"),
+    "ENRICH_MODEL": os.getenv("LLM_ENRICH_MODEL", ""),  # defaults to MODEL
+    "MAX_TOKENS": int(os.getenv("LLM_MAX_TOKENS", "1024")),
+    "SUNA_BASE_URL": os.getenv("SUNA_BASE_URL", ""),
 }
 
 LOGGING = {

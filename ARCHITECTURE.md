@@ -79,11 +79,18 @@ What changed vs. the original project:
 ## Pipeline
 
 ```
- ┌──────────────┐  DISCOVER  ┌──────────────┐  QUALIFY  ┌──────────────────┐
- │  Source      │ ─────────▶ │  Lead        │ ────────▶ │ Qualifier (GP)   │
- │  (permits,   │            │  stage=      │           │ posterior mean µ │
- │  solar, …)   │            │  DISCOVERED  │           │ posterior var σ² │
- └──────────────┘            └──────────────┘           └────────┬─────────┘
+ ┌──────────────┐  DISCOVER  ┌──────────────┐  ENRICH   ┌──────────────────┐
+ │  Source      │ ─────────▶ │  Lead        │ ────────▶ │ LLMAdapter       │
+ │  (permits,   │            │  stage=      │           │ .enrich_contact  │
+ │  solar, …)   │            │  DISCOVERED  │           │ (web search)     │
+ └──────────────┘            └──────┬───────┘           └────────┬─────────┘
+                                    │  QUALIFY                   │
+                                    ▼                            ▼
+                             ┌──────────────┐           ┌──────────────────┐
+                             │  Lead (with  │  QUALIFY  │ Qualifier (GP    │
+                             │  contact)    │ ────────▶ │  or LLM judge    │
+                             └──────────────┘           │  at cold-start)  │
+                                                        └────────┬─────────┘
                                                                   │
                                                   µ ≥ 0.55  or    │
                                                  heuristic ≥ 50   ▼
@@ -113,9 +120,34 @@ dispatches each task to a handler:
 | Task type    | Handler                    | Reschedule         |
 |--------------|----------------------------|--------------------|
 | `discover`   | `outreach.tasks.discover`  | per-source interval|
+| `enrich`     | `outreach.tasks.enrich`    | `ENRICH_INTERVAL_MIN` |
 | `qualify`    | `outreach.tasks.qualify`   | `QUALIFY_INTERVAL_MIN` |
 | `outreach`   | `outreach.tasks.outreach`  | `OUTREACH_INTERVAL_MIN` |
 | `follow_up`  | `outreach.tasks.outreach.handle_follow_up` | 12 h |
+
+## LLM adapter interface
+
+The `outreach/llm/` module sits between the pipeline tasks and whichever
+LLM backend is configured. Everything goes through a single ABC:
+
+```python
+class LLMAdapter(ABC):
+    def enrich_contact(self, lead) -> dict: ...
+    def qualify_lead(self, lead, campaign) -> tuple[float | None, str]: ...
+    def write_outreach(self, lead, campaign) -> str | None: ...
+```
+
+Concrete implementations:
+
+| Adapter               | Module                         | Notes                                                    |
+|-----------------------|--------------------------------|----------------------------------------------------------|
+| `AnthropicAdapter`    | `outreach.llm.client`          | Default. Anthropic SDK + prompt caching + web_search.    |
+| `SunaSidecarAdapter`  | `outreach.llm.adapter` (stub)  | Stub — see `docs/SUNA_INTEGRATION.md`.                   |
+| `NoopAdapter`         | `outreach.llm.adapter`         | Auto-used when `ANTHROPIC_API_KEY` is missing.           |
+
+`get_adapter()` picks the backend from `settings.LLM["ADAPTER"]` and
+falls back to Noop on any initialisation error, so the daemon never
+crashes because of an LLM configuration problem.
 
 After every task the daemon re-seeds periodic jobs so the pipeline keeps
 flowing forever without external schedulers.

@@ -13,12 +13,22 @@ class CampaignAdmin(admin.ModelAdmin):
     list_display = (
         "name",
         "is_active",
+        "outreach_tone",
+        "llm_enricher_enabled",
+        "llm_qualifier_enabled",
+        "llm_writer_enabled",
         "positive_labels",
         "negative_labels",
         "model_trained_at",
     )
     search_fields = ("name",)
-    list_filter = ("is_active",)
+    list_filter = (
+        "is_active",
+        "outreach_tone",
+        "llm_enricher_enabled",
+        "llm_qualifier_enabled",
+        "llm_writer_enabled",
+    )
 
 
 @admin.register(Source)
@@ -49,7 +59,15 @@ class LeadAdmin(admin.ModelAdmin):
         "contact_email",
         "external_id",
     )
-    readonly_fields = ("created_at", "updated_at", "stage_changed_at", "raw")
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+        "stage_changed_at",
+        "raw",
+        "enrichment_log",
+        "llm_qualification_reason",
+        "llm_outreach_body",
+    )
 
 
 @admin.register(ActionLog)

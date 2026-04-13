@@ -11,3 +11,8 @@ schedule>=1.2.0
 # ML qualifier
 numpy>=1.26
 scikit-learn>=1.4
+
+# LLM layer (outreach/llm/) — optional: the daemon falls back to a
+# NoopAdapter when ANTHROPIC_API_KEY is missing, so installs without
+# this package still run.
+anthropic>=0.39.0
