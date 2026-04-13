@@ -12,6 +12,37 @@ services:
     environment:
       - DJANGO_DEBUG=true
       - DJANGO_SETTINGS_MODULE=outreach.django_settings
+      # Matplotlib otherwise tries to write /.config (not writable for
+      # the non-root bind-mount user) and logs a warning on every import.
+      - MPLCONFIGDIR=/tmp/matplotlib
+      - HOME=/tmp
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    command: >
+      sh -c "python manage.py migrate --no-input &&
+             python manage.py setup_crm &&
+             python manage.py rundaemon"
+
+  # Optional: Django admin / CRM web UI. Start it separately with
+  #   docker compose -f local.yml --profile web up -d web
+  # so the task daemon (service "app") stays the default.
+  web:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: ./compose/outreach/Dockerfile
+      args:
+        - BUILD_ENV=local
+    restart: unless-stopped
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      - DJANGO_DEBUG=true
+      - DJANGO_SETTINGS_MODULE=outreach.django_settings
+      - MPLCONFIGDIR=/tmp/matplotlib
+      - HOME=/tmp
     env_file:
       - .env
     volumes:
@@ -21,5 +52,4 @@ services:
       - "8000:8000"
     command: >
       sh -c "python manage.py migrate --no-input &&
-             python manage.py setup_crm &&
-             python manage.py rundaemon"
+             python manage.py runserver 0.0.0.0:8000"

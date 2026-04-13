@@ -65,6 +65,22 @@ def _get_agent(kind: str):
 
 
 # ─── Normalization ──────────────────────────────────────────────────
+def _to_float(value) -> float | None:
+    """Coerce a raw field to ``float`` or ``None``.
+
+    Agents frequently hand us ``""`` (empty string) for missing lat/lon —
+    Django's ``FloatField`` rejects that with a ``ValueError`` which kills
+    the whole ``discover`` task. Treat empty / non-numeric values as
+    missing so the row is still inserted.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize(raw: dict, source: Source) -> dict:
     """Project a legacy agent dict onto Lead model fields."""
     ext_id = str(
@@ -87,8 +103,10 @@ def _normalize(raw: dict, source: Source) -> dict:
         or raw.get("project_type")
         or raw.get("category", ""),
         "description": raw.get("description", ""),
-        "latitude": raw.get("latitude") or raw.get("lat"),
-        "longitude": raw.get("longitude") or raw.get("lng") or raw.get("lon"),
+        "latitude": _to_float(raw.get("latitude") or raw.get("lat")),
+        "longitude": _to_float(
+            raw.get("longitude") or raw.get("lng") or raw.get("lon")
+        ),
         "contact_name": raw.get("contact_name") or raw.get("contractor_name", ""),
         "contact_company": raw.get("contractor") or raw.get("company", ""),
         "contact_phone": raw.get("phone") or raw.get("contact_phone", ""),
