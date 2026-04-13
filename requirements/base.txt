@@ -1,0 +1,18 @@
+# Core runtime dependencies for the Insulleads outreach daemon + CRM.
+# Adapted from OpenOutreach (Django + task queue) but retargeted to
+# public-data lead sources.
+
+Django>=5.0,<6.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+schedule>=1.2.0
+
+# ML qualifier
+numpy>=1.26
+scikit-learn>=1.4
+
+# LLM layer (outreach/llm/) — optional: the daemon falls back to a
+# NoopAdapter when ANTHROPIC_API_KEY is missing, so installs without
+# this package still run.
+anthropic>=0.39.0

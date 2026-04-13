@@ -1,0 +1,51 @@
+{% extends "crm/base.html" %}
+{% block content %}
+  <h2>Campaigns</h2>
+  <ul>
+    {% for c in campaigns %}
+      <li>
+        <strong>{{ c.name }}</strong> —
+        pos/neg labels: {{ c.positive_labels }}/{{ c.negative_labels }}
+        {% if c.model_trained_at %}
+          (trained {{ c.model_trained_at|timesince }} ago)
+        {% else %}
+          (cold start)
+        {% endif %}
+      </li>
+    {% empty %}
+      <li><em>No campaigns yet. Run <code>python manage.py setup_crm</code>.</em></li>
+    {% endfor %}
+  </ul>
+
+  <h2>Pipeline</h2>
+  <table>
+    <thead><tr><th>Stage</th><th>Count</th></tr></thead>
+    <tbody>
+    {% for row in by_stage %}
+      <tr><td><span class="pill stage-{{ row.stage }}">{{ row.stage }}</span></td><td>{{ row.count }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Recent leads</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th><th>City</th><th>Source</th>
+        <th>Score</th><th>Stage</th><th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for l in recent %}
+      <tr>
+        <td><a href="{% url 'crm:lead_detail' l.pk %}">{{ l.title|truncatechars:60 }}</a></td>
+        <td>{{ l.city }}</td>
+        <td>{{ l.source.key }}</td>
+        <td>{{ l.qualification_score|default:"—" }}</td>
+        <td><span class="pill stage-{{ l.stage }}">{{ l.stage }}</span></td>
+        <td>{{ l.created_at|date:"Y-m-d H:i" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}
