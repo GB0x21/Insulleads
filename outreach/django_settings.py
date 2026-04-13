@@ -124,6 +124,18 @@ LLM = {
     "RAG_INDEX_PATH": os.getenv("LLM_RAG_INDEX_PATH", str(DATA_DIR / "rag_index")),
 }
 
+# ─── Thermal engine (outreach/thermal/) — Phase 1 ──────────────────────
+# The pipeline is offline: `python manage.py thermal_pull` hits Earth
+# Engine and writes per-building anomaly deltas to data/thermal/. The
+# ThermalAgent at discover time only reads that parquet, so the daemon
+# never needs GEE credentials in the hot path.
+THERMAL = {
+    "ENABLED": bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")),
+    "DEFAULT_BBOX": os.getenv("THERMAL_BBOX", ""),
+    "MIN_ANOMALY_K": float(os.getenv("THERMAL_MIN_ANOMALY_K", "3.0")),
+    "CACHE_DIR": str(DATA_DIR / "thermal"),
+}
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

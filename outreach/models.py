@@ -118,6 +118,7 @@ class Source(models.Model):
         ("energy", "Energy benchmarking"),
         ("places", "Google Places"),
         ("yelp", "Yelp contractors"),
+        ("thermal", "Thermal anomaly (Landsat)"),
         ("csv", "CSV import"),
     ]
 
@@ -179,6 +180,10 @@ class Lead(models.Model):
     qualification_score = models.FloatField(blank=True, null=True)
     qualification_variance = models.FloatField(blank=True, null=True)
     lead_score = models.PositiveIntegerField(default=0)  # 0-100 heuristic
+
+    # Thermal engine (Phase 1) — populated by the thermal agent.
+    thermal_anomaly_k = models.FloatField(blank=True, null=True)
+    building_footprint_id = models.CharField(max_length=64, blank=True, default="")
 
     # State machine
     stage = models.CharField(
