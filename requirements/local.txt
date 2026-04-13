@@ -5,3 +5,8 @@ pytest>=8.0
 pytest-django>=4.8
 ipython>=8.0
 django-extensions>=3.2
+
+# Streamlit MVP dashboard — see dashboards/README.md
+streamlit>=1.32
+pydeck>=0.8
+pandas>=2.0

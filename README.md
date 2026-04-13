@@ -200,6 +200,22 @@ program). When `llama_index` is missing, `data/rag_docs/` is empty,
 or the index isn't built, the writer silently falls back to
 unreferenced copy.
 
+### Dashboard (MVP)
+
+A read-only Streamlit dashboard lives in `dashboards/`. It boots
+Django in-process and offers three tabs: a pydeck map of geocoded
+leads, a stage-count funnel with conversion rates, and a sortable
+table with per-lead detail. Run with:
+
+```bash
+pip install -r requirements/local.txt   # streamlit + pydeck
+make dashboard                           # http://localhost:8501
+```
+
+See [`dashboards/README.md`](dashboards/README.md) for notes. The
+dashboard is read-only — for labelling and edits use the Django
+admin at `/admin/`.
+
 ---
 
 ## Legacy entrypoint
