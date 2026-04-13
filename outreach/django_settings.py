@@ -115,6 +115,13 @@ LLM = {
     "ENRICH_MODEL": os.getenv("LLM_ENRICH_MODEL", ""),  # defaults to MODEL
     "MAX_TOKENS": int(os.getenv("LLM_MAX_TOKENS", "1024")),
     "SUNA_BASE_URL": os.getenv("SUNA_BASE_URL", ""),
+    # LlamaIndex RAG — the writer cites PG&E / Title 24 / ENERGY STAR
+    # snippets from a local vector index when available. Disabled by
+    # default; enable by dropping PDFs in RAG_DOCS_DIR and running
+    # `python manage.py build_rag_index`.
+    "RAG_ENABLED": os.getenv("LLM_RAG_ENABLED", "true").lower() not in ("false", "0", "no"),
+    "RAG_DOCS_DIR": os.getenv("LLM_RAG_DOCS_DIR", str(DATA_DIR / "rag_docs")),
+    "RAG_INDEX_PATH": os.getenv("LLM_RAG_INDEX_PATH", str(DATA_DIR / "rag_index")),
 }
 
 LOGGING = {

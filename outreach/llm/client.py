@@ -30,6 +30,7 @@ from .prompts import (
     campaign_prefix,
     lead_payload,
 )
+from .rag import get_default_index
 
 if TYPE_CHECKING:
     from outreach.models import Campaign, Lead
@@ -66,6 +67,29 @@ class AnthropicAdapter(LLMAdapter):
         self._max_tokens = int(cfg.get("MAX_TOKENS") or 1024)
 
     # ── shared helpers ────────────────────────────────────────────
+    def _retrieve_references(self, lead: "Lead") -> str:
+        """Pull top-k RAG snippets for this lead and format them for
+        injection into the writer's user message. Empty string when
+        the RAG index is a no-op or retrieval fails."""
+        try:
+            index = get_default_index()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("rag index unavailable: %s", exc)
+            return ""
+        if not index.available:
+            return ""
+
+        query_parts = [
+            "insulation incentives rebates",
+            lead.city or "",
+            lead.project_type or "",
+        ]
+        query = " ".join(p for p in query_parts if p).strip()
+        snippets = index.retrieve(query, k=4)
+        if not snippets:
+            return ""
+        return "\n".join(f"- {s.format()}" for s in snippets)
+
     def _cached_system(self, body: str) -> list[dict[str, Any]]:
         """Return a system-block list with one cache breakpoint at the end."""
         return [
@@ -186,11 +210,14 @@ class AnthropicAdapter(LLMAdapter):
             f"{booking or '(none)'}\n\n"
             f"{campaign_prefix(campaign)}"
         )
+        references_block = self._retrieve_references(lead)
         user_prompt = (
             "Draft the outreach message for this lead. Output ONLY the "
             "message body.\n\n"
             f"{lead_payload(lead)}"
         )
+        if references_block:
+            user_prompt += f"\n\nReferences:\n{references_block}"
         try:
             response = self._client.messages.create(
                 model=self._model_default,

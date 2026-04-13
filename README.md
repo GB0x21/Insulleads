@@ -180,6 +180,26 @@ Per-campaign toggles (`Campaign.llm_enricher_enabled`,
 `llm_qualifier_enabled`, `llm_writer_enabled`, `outreach_tone`) are
 exposed in the Django admin.
 
+#### RAG for the outreach writer
+
+The writer can cite real PG&E / Title 24 / ENERGY STAR programs
+instead of inventing them. Drop the PDFs into `data/rag_docs/` and
+build a local LlamaIndex vector index:
+
+```bash
+pip install llama-index-core llama-index-embeddings-huggingface pypdf
+python manage.py build_rag_index           # ingest data/rag_docs/
+python manage.py build_rag_index --rebuild # force a rebuild
+```
+
+The writer queries the index with
+`"insulation incentives rebates {city} {project_type}"`, injects the
+top-4 matches as a `References:` block into the user message, and is
+told to cite one rule if it actually fits (and never to invent a
+program). When `llama_index` is missing, `data/rag_docs/` is empty,
+or the index isn't built, the writer silently falls back to
+unreferenced copy.
+
 ---
 
 ## Legacy entrypoint

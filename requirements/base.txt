@@ -17,3 +17,10 @@ lightgbm>=4.0
 # NoopAdapter when ANTHROPIC_API_KEY is missing, so installs without
 # this package still run.
 anthropic>=0.39.0
+
+# RAG layer (outreach/llm/rag.py) — optional: the writer falls back
+# to unreferenced copy when llama_index is missing or the index is
+# empty, so installs without these packages still run.
+llama-index-core>=0.10
+llama-index-embeddings-huggingface>=0.2
+pypdf>=4.0
