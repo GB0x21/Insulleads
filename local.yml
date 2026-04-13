@@ -1,0 +1,25 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: ./compose/outreach/Dockerfile
+      args:
+        - BUILD_ENV=local
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      - DJANGO_DEBUG=true
+      - DJANGO_SETTINGS_MODULE=outreach.django_settings
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "python manage.py migrate --no-input &&
+             python manage.py setup_crm &&
+             python manage.py rundaemon"

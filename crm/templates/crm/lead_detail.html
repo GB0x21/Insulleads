@@ -1,0 +1,31 @@
+{% extends "crm/base.html" %}
+{% block content %}
+  <p><a href="{% url 'crm:dashboard' %}">&larr; back</a></p>
+  <h2>{{ lead.title }}</h2>
+  <p><span class="pill stage-{{ lead.stage }}">{{ lead.stage }}</span></p>
+
+  <table>
+    <tr><th>Address</th><td>{{ lead.address }}, {{ lead.city }}</td></tr>
+    <tr><th>Project type</th><td>{{ lead.project_type }}</td></tr>
+    <tr><th>Value</th><td>{% if lead.project_value %}${{ lead.project_value }}{% else %}—{% endif %}</td></tr>
+    <tr><th>Contact</th><td>{{ lead.contact_name }} — {{ lead.contact_company }}</td></tr>
+    <tr><th>Phone</th><td>{{ lead.contact_phone }}</td></tr>
+    <tr><th>Email</th><td>{{ lead.contact_email }}</td></tr>
+    <tr><th>Heuristic score</th><td>{{ lead.lead_score }}/100</td></tr>
+    <tr><th>GP score</th><td>{{ lead.qualification_score|default:"—" }}</td></tr>
+    <tr><th>GP variance</th><td>{{ lead.qualification_variance|default:"—" }}</td></tr>
+    <tr><th>Source</th><td>{{ lead.source.key }} ({{ lead.source.get_kind_display }})</td></tr>
+    <tr><th>Campaign</th><td>{{ lead.campaign.name }}</td></tr>
+  </table>
+
+  <h3>Description</h3>
+  <p>{{ lead.description|linebreaksbr }}</p>
+
+  <h3>Label this lead (retrains the GP)</h3>
+  <form method="post" action="{% url 'crm:label_lead' lead.pk %}">
+    {% csrf_token %}
+    <button name="label" value="won">✅ Won</button>
+    <button name="label" value="replied">💬 Replied</button>
+    <button name="label" value="lost">❌ Lost</button>
+  </form>
+{% endblock %}

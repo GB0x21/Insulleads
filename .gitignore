@@ -7,6 +7,8 @@ __pycache__/
 # Data
 data/leads.db
 data/*.db
+data/db.sqlite3
+staticfiles/
 
 # IDE
 .vscode/

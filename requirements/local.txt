@@ -1,0 +1,7 @@
+-r base.txt
+
+# Dev / test tools
+pytest>=8.0
+pytest-django>=4.8
+ipython>=8.0
+django-extensions>=3.2
