@@ -8,9 +8,10 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 schedule>=1.2.0
 
-# ML qualifier
+# ML qualifier — GP (legacy) + LightGBM primary (Phase 2)
 numpy>=1.26
 scikit-learn>=1.4
+lightgbm>=4.0
 
 # LLM layer (outreach/llm/) — optional: the daemon falls back to a
 # NoopAdapter when ANTHROPIC_API_KEY is missing, so installs without

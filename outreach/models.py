@@ -65,11 +65,17 @@ class Campaign(models.Model):
     max_outreach_per_day = models.PositiveIntegerField(default=200)
     max_outreach_per_week = models.PositiveIntegerField(default=1000)
 
-    # ML model state (pickled Bayesian GP regressor)
+    # ML model state (pickled Bayesian GP regressor — legacy fallback)
     model_blob = models.BinaryField(blank=True, null=True)
     model_trained_at = models.DateTimeField(blank=True, null=True)
     positive_labels = models.PositiveIntegerField(default=0)
     negative_labels = models.PositiveIntegerField(default=0)
+
+    # LightGBM qualifier — Phase 2. Becomes primary once there are
+    # ≥ MIN_LABELS_FOR_TRAINING labels; GP stays available as fallback.
+    lgbm_model_blob = models.BinaryField(blank=True, null=True)
+    lgbm_trained_at = models.DateTimeField(blank=True, null=True)
+    lgbm_feature_importance = models.JSONField(default=dict, blank=True)
 
     # LLM layer toggles (see outreach/llm/)
     class Tone(models.TextChoices):
