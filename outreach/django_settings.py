@@ -115,6 +115,25 @@ LLM = {
     "ENRICH_MODEL": os.getenv("LLM_ENRICH_MODEL", ""),  # defaults to MODEL
     "MAX_TOKENS": int(os.getenv("LLM_MAX_TOKENS", "1024")),
     "SUNA_BASE_URL": os.getenv("SUNA_BASE_URL", ""),
+    # LlamaIndex RAG — the writer cites PG&E / Title 24 / ENERGY STAR
+    # snippets from a local vector index when available. Disabled by
+    # default; enable by dropping PDFs in RAG_DOCS_DIR and running
+    # `python manage.py build_rag_index`.
+    "RAG_ENABLED": os.getenv("LLM_RAG_ENABLED", "true").lower() not in ("false", "0", "no"),
+    "RAG_DOCS_DIR": os.getenv("LLM_RAG_DOCS_DIR", str(DATA_DIR / "rag_docs")),
+    "RAG_INDEX_PATH": os.getenv("LLM_RAG_INDEX_PATH", str(DATA_DIR / "rag_index")),
+}
+
+# ─── Thermal engine (outreach/thermal/) — Phase 1 ──────────────────────
+# The pipeline is offline: `python manage.py thermal_pull` hits Earth
+# Engine and writes per-building anomaly deltas to data/thermal/. The
+# ThermalAgent at discover time only reads that parquet, so the daemon
+# never needs GEE credentials in the hot path.
+THERMAL = {
+    "ENABLED": bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")),
+    "DEFAULT_BBOX": os.getenv("THERMAL_BBOX", ""),
+    "MIN_ANOMALY_K": float(os.getenv("THERMAL_MIN_ANOMALY_K", "3.0")),
+    "CACHE_DIR": str(DATA_DIR / "thermal"),
 }
 
 LOGGING = {

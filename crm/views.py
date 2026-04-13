@@ -12,7 +12,8 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from outreach.ml.qualifier import retrain
+from outreach.ml.lgbm import retrain as lgbm_retrain
+from outreach.ml.qualifier import retrain as gp_retrain
 from outreach.models import Campaign, Lead
 
 
@@ -53,5 +54,9 @@ def label_lead(request, pk: int):
         lead.advance(Lead.Stage.REPLIED)
     elif label == "lost":
         lead.advance(Lead.Stage.LOST)
-    retrain(lead.campaign)
+    # Retrain both qualifiers: the GP for legacy compatibility and
+    # LightGBM as the new primary (Phase 2 of the roadmap). Both are
+    # no-ops when their sklearn/lightgbm dep is missing, so this is safe.
+    gp_retrain(lead.campaign)
+    lgbm_retrain(lead.campaign)
     return HttpResponseRedirect(reverse("crm:lead_detail", args=[pk]))

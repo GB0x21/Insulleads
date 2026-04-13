@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help logs test docker-test stop build up install setup run admin migrate shell
+.PHONY: help logs test docker-test stop build up install setup run admin migrate shell dashboard
 
 help:
 	@perl -nle'print $$& if m{^[a-zA-Z_-]+:.*?## .*$$}' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +29,9 @@ migrate: ## apply database migrations
 
 shell: ## open a Django shell
 	python manage.py shell
+
+dashboard: ## run the Streamlit MVP dashboard on :8501
+	streamlit run dashboards/streamlit_app.py
 
 test: ## run the test suite
 	pytest -q

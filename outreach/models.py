@@ -65,11 +65,17 @@ class Campaign(models.Model):
     max_outreach_per_day = models.PositiveIntegerField(default=200)
     max_outreach_per_week = models.PositiveIntegerField(default=1000)
 
-    # ML model state (pickled Bayesian GP regressor)
+    # ML model state (pickled Bayesian GP regressor — legacy fallback)
     model_blob = models.BinaryField(blank=True, null=True)
     model_trained_at = models.DateTimeField(blank=True, null=True)
     positive_labels = models.PositiveIntegerField(default=0)
     negative_labels = models.PositiveIntegerField(default=0)
+
+    # LightGBM qualifier — Phase 2. Becomes primary once there are
+    # ≥ MIN_LABELS_FOR_TRAINING labels; GP stays available as fallback.
+    lgbm_model_blob = models.BinaryField(blank=True, null=True)
+    lgbm_trained_at = models.DateTimeField(blank=True, null=True)
+    lgbm_feature_importance = models.JSONField(default=dict, blank=True)
 
     # LLM layer toggles (see outreach/llm/)
     class Tone(models.TextChoices):
@@ -112,6 +118,7 @@ class Source(models.Model):
         ("energy", "Energy benchmarking"),
         ("places", "Google Places"),
         ("yelp", "Yelp contractors"),
+        ("thermal", "Thermal anomaly (Landsat)"),
         ("csv", "CSV import"),
     ]
 
@@ -173,6 +180,10 @@ class Lead(models.Model):
     qualification_score = models.FloatField(blank=True, null=True)
     qualification_variance = models.FloatField(blank=True, null=True)
     lead_score = models.PositiveIntegerField(default=0)  # 0-100 heuristic
+
+    # Thermal engine (Phase 1) — populated by the thermal agent.
+    thermal_anomaly_k = models.FloatField(blank=True, null=True)
+    building_footprint_id = models.CharField(max_length=64, blank=True, default="")
 
     # State machine
     stage = models.CharField(
