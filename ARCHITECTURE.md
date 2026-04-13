@@ -152,14 +152,33 @@ crashes because of an LLM configuration problem.
 After every task the daemon re-seeds periodic jobs so the pipeline keeps
 flowing forever without external schedulers.
 
-## Cold-start qualifier
+## Qualifier decision ladder
 
-With fewer than 2 labels the Bayesian qualifier is useless, so `qualify.py`
-falls back to the legacy `lead_score` heuristic (0–100, see
-`utils/lead_scoring.py`). Once a user labels leads in the CRM as
-WON / REPLIED / LOST, `outreach.ml.qualifier.retrain()` refits a
-`GaussianProcessRegressor` on the accumulated embeddings and the system
-starts using posterior means to prioritise outreach.
+`outreach/tasks/qualify.py` picks a backend per campaign, in this order:
+
+1. **LightGBM** (`outreach.ml.lgbm`) — primary once a campaign has
+   ≥ `MIN_LABELS_FOR_TRAINING` (10) labels. Trained on the 21-feature
+   tabular extractor in `outreach/ml/features.py`.
+2. **Gaussian Process** (`outreach.ml.qualifier`) — legacy fallback,
+   used with 2–9 labels. Kept alive so upgrades don't regress cold-start
+   behaviour, and retrained alongside LightGBM from the CRM label view.
+3. **LLM judge** (`outreach.llm`) — cold-start helper when the campaign
+   has < 2 labels and a non-noop adapter is available.
+4. **Heuristic** (`utils.lead_scoring`) — 0–100 safety net when nothing
+   else is available.
+
+Each step is independently optional: missing `lightgbm`, missing
+`scikit-learn`, or a noop LLM adapter each just slide the ladder down a
+rung — the daemon keeps running on fresh boxes.
+
+## Roadmap: demand forecasting
+
+Phase 5 of the roadmap fits a `Prophet` model on weekly WON-lead volume
+per campaign to produce an 8-week demand forecast for capacity planning.
+The entry point is `outreach.ml.forecast.forecast_weekly(campaign)`,
+currently a stub that raises `NotImplementedError`. Prophet is heavy
+(`pystan` build chain) so it stays out of `requirements/base.txt` until
+there is enough label volume to make training worthwhile.
 
 ## Running
 
