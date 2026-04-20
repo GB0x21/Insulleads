@@ -63,6 +63,13 @@ class LLMAdapter(ABC):
         """Return a ready-to-send message body, or ``None`` to fall back
         to the legacy template in ``outreach.tasks.outreach``."""
 
+    @abstractmethod
+    def write_email(
+        self, lead: "Lead", campaign: "Campaign"
+    ) -> "dict[str, str] | None":
+        """Return ``{"subject": str, "body": str}`` for a cold prospect email,
+        or ``None`` to skip sending. Body is plain text."""
+
 
 class NoopAdapter(LLMAdapter):
     """Zero-dependency fallback. Always used when ``ANTHROPIC_API_KEY`` is
@@ -78,6 +85,9 @@ class NoopAdapter(LLMAdapter):
         return (None, "")
 
     def write_outreach(self, lead, campaign):
+        return None
+
+    def write_email(self, lead, campaign):
         return None
 
 
@@ -107,6 +117,9 @@ class SunaSidecarAdapter(LLMAdapter):
         self._not_implemented()
 
     def write_outreach(self, lead, campaign):
+        self._not_implemented()
+
+    def write_email(self, lead, campaign):
         self._not_implemented()
 
 

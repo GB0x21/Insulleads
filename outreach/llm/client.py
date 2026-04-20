@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from .adapter import LLMAdapter
 from .prompts import (
+    SYSTEM_EMAIL_WRITER,
     SYSTEM_ENRICHER,
     SYSTEM_QUALIFIER,
     SYSTEM_WRITER,
@@ -231,3 +232,46 @@ class AnthropicAdapter(LLMAdapter):
 
         body = self._collect_text(response)
         return body or None
+
+    # ── 4. write_email ────────────────────────────────────────────
+    def write_email(
+        self, lead: "Lead", campaign: "Campaign"
+    ) -> dict[str, str] | None:
+        """Return {"subject": str, "body": str} for a cold prospect email,
+        or None on failure. Body is plain text; the caller wraps it in HTML."""
+        tone = getattr(campaign, "outreach_tone", "professional") or "professional"
+        booking = campaign.booking_link or ""
+        system_body = (
+            f"{SYSTEM_EMAIL_WRITER}\n\n"
+            f"Tone: {tone}.\n"
+            f"Booking/Calendly link (include only if natural): "
+            f"{booking or '(none)'}\n\n"
+            f"{campaign_prefix(campaign)}"
+        )
+        references_block = self._retrieve_references(lead)
+        user_prompt = (
+            "Write the cold-prospect email for this lead. "
+            "Output ONLY the JSON object.\n\n"
+            f"{lead_payload(lead)}"
+        )
+        if references_block:
+            user_prompt += f"\n\nReferences:\n{references_block}"
+        try:
+            response = self._client.messages.create(
+                model=self._model_default,
+                max_tokens=700,
+                system=self._cached_system(system_body),
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("write_email failed for lead=%s: %s", lead.pk, exc)
+            return None
+
+        parsed = self._parse_json(self._collect_text(response))
+        if not isinstance(parsed, dict):
+            return None
+        subject = str(parsed.get("subject") or "").strip()[:255]
+        body = str(parsed.get("body") or "").strip()
+        if not subject or not body:
+            return None
+        return {"subject": subject, "body": body}
