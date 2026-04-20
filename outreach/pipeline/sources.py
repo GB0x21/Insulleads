@@ -57,6 +57,8 @@ def _get_agent(kind: str):
         from agents.yelp_agent import YelpAgent as Cls
     elif kind == "thermal":
         from agents.thermal_agent import ThermalAgent as Cls
+    elif kind == "email_prospect":
+        from agents.email_prospect_agent import EmailProspectAgent as Cls
     else:
         raise ValueError(f"Unknown source kind: {kind}")
 
@@ -90,7 +92,7 @@ def _normalize(raw: dict, source: Source) -> dict:
         "latitude": raw.get("latitude") or raw.get("lat"),
         "longitude": raw.get("longitude") or raw.get("lng") or raw.get("lon"),
         "contact_name": raw.get("contact_name") or raw.get("contractor_name", ""),
-        "contact_company": raw.get("contractor") or raw.get("company", ""),
+        "contact_company": raw.get("contact_company") or raw.get("contractor") or raw.get("company", ""),
         "contact_phone": raw.get("phone") or raw.get("contact_phone", ""),
         "contact_email": raw.get("email") or raw.get("contact_email", ""),
         "contact_source": raw.get("contact_source", ""),

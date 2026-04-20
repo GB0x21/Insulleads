@@ -93,6 +93,8 @@ OUTREACH = {
     "OUTREACH_INTERVAL_MIN": int(os.getenv("OUTREACH_INTERVAL_MIN", "5")),
     "ENRICH_INTERVAL_MIN": int(os.getenv("ENRICH_INTERVAL_MIN", "30")),
     "MAX_OUTREACH_PER_DAY": int(os.getenv("MAX_OUTREACH_PER_DAY", "200")),
+    "EMAIL_PROSPECT_INTERVAL_MIN": int(os.getenv("EMAIL_PROSPECT_INTERVAL_MIN", "30")),
+    "MAX_EMAIL_PROSPECT_PER_DAY": int(os.getenv("MAX_EMAIL_PROSPECT_PER_DAY", "50")),
     "SOURCES_ENABLED": [
         key for key in [
             "permits", "solar", "rodents", "flood",

@@ -120,6 +120,7 @@ class Source(models.Model):
         ("yelp", "Yelp contractors"),
         ("thermal", "Thermal anomaly (Landsat)"),
         ("csv", "CSV import"),
+        ("email_prospect", "Email prospect discovery"),
     ]
 
     key = models.CharField(max_length=64, unique=True)
@@ -192,6 +193,10 @@ class Lead(models.Model):
     stage_changed_at = models.DateTimeField(default=timezone.now)
     raw = models.JSONField(default=dict, blank=True)
 
+    # Email prospect outreach tracking
+    email_prospect_sent_at = models.DateTimeField(blank=True, null=True)
+    email_prospect_subject = models.CharField(max_length=256, blank=True, default="")
+
     # LLM layer output cache (outreach/llm/)
     enrichment_log = models.JSONField(default=dict, blank=True)
     llm_qualification_reason = models.TextField(blank=True, default="")
@@ -225,6 +230,7 @@ class ActionLog(models.Model):
         QUALIFIED = "qualified", "Qualified"
         TELEGRAM = "telegram", "Telegram sent"
         EMAIL = "email", "Email sent"
+        EMAIL_PROSPECT = "email_prospect", "Personalized email sent to prospect"
         WHATSAPP = "whatsapp", "WhatsApp sent"
         REPLY = "reply", "Reply received"
         NOTE = "note", "Manual note"
@@ -268,6 +274,7 @@ class Task(models.Model):
         QUALIFY = "qualify", "Qualify discovered leads"
         OUTREACH = "outreach", "Send outreach for a lead"
         FOLLOW_UP = "follow_up", "Follow up after N days"
+        EMAIL_PROSPECT = "email_prospect", "Send personalized email to prospect"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
