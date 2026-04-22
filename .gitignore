@@ -22,3 +22,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Scrapy
+data/.scrapy_httpcache/
+.scrapy/

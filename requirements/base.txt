@@ -8,6 +8,12 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 schedule>=1.2.0
 
+# Scrapy crawling layer (scrapy_crawlers/). Used as a new Source kind
+# alongside the legacy `agents/` package for HTML-only targets (CSLB,
+# municipal permit portals, contractor directories).
+scrapy>=2.11,<3.0
+itemadapter>=0.8
+
 # ML qualifier — GP (legacy) + LightGBM primary (Phase 2)
 numpy>=1.26
 scikit-learn>=1.4

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help logs test docker-test stop build up install setup run admin migrate shell dashboard
+.PHONY: help logs test docker-test stop build up install setup run admin migrate shell dashboard crawl
 
 help:
 	@perl -nle'print $$& if m{^[a-zA-Z_-]+:.*?## .*$$}' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -32,6 +32,10 @@ shell: ## open a Django shell
 
 dashboard: ## run the Streamlit MVP dashboard on :8501
 	streamlit run dashboards/streamlit_app.py
+
+crawl: ## run a Scrapy spider in isolation (usage: make crawl SPIDER=cslb_contractors ARGS='-a license_numbers=123456')
+	@test -n "$(SPIDER)" || (echo "Usage: make crawl SPIDER=<spider_name> [ARGS='...']" && exit 1)
+	scrapy crawl $(SPIDER) $(ARGS)
 
 test: ## run the test suite
 	pytest -q

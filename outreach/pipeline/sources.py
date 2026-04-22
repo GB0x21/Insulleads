@@ -28,8 +28,33 @@ class DiscoverySource(Protocol):
 _AGENT_CACHE: dict[str, object] = {}
 
 
-def _get_agent(kind: str):
-    """Import & instantiate the legacy agent for the given source kind."""
+def _get_agent(source: Source):
+    """Import & instantiate the backend (legacy agent or ScrapySource) for a source."""
+    kind = source.kind
+
+    # Scrapy sources are cached per-key because two sources of kind="scrapy"
+    # can run entirely different spiders.
+    if kind == "scrapy":
+        cache_key = f"scrapy:{source.key}"
+        if cache_key in _AGENT_CACHE:
+            return _AGENT_CACHE[cache_key]
+        from outreach.pipeline.scrapy_source import ScrapySource
+
+        config = source.config or {}
+        spider_name = config.get("spider")
+        if not spider_name:
+            raise ValueError(
+                f"Source {source.key!r} is kind=scrapy but config.spider is missing"
+            )
+        backend = ScrapySource(
+            spider_name=spider_name,
+            spider_args=config.get("spider_args", {}),
+            timeout=config.get("timeout"),
+            source_key=source.key,
+        )
+        _AGENT_CACHE[cache_key] = backend
+        return backend
+
     if kind in _AGENT_CACHE:
         return _AGENT_CACHE[kind]
 
@@ -107,7 +132,7 @@ def _normalize(raw: dict, source: Source) -> dict:
 def fetch_source(source: Source) -> list[dict]:
     """Run the underlying agent and return normalized lead dicts."""
     try:
-        agent = _get_agent(source.kind)
+        agent = _get_agent(source)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Source %s unavailable: %s", source.kind, exc)
         return []

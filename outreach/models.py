@@ -121,6 +121,7 @@ class Source(models.Model):
         ("thermal", "Thermal anomaly (Landsat)"),
         ("csv", "CSV import"),
         ("email_prospect", "Email prospect discovery"),
+        ("scrapy", "Scrapy spider"),
     ]
 
     key = models.CharField(max_length=64, unique=True)
@@ -132,6 +133,7 @@ class Source(models.Model):
     last_run_at = models.DateTimeField(blank=True, null=True)
     last_error = models.TextField(blank=True, default="")
     enabled = models.BooleanField(default=True)
+    config = models.JSONField(default=dict, blank=True)
 
     def __str__(self) -> str:
         return f"{self.get_kind_display()} ({self.key})"
