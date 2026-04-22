@@ -92,6 +92,16 @@ def _get_agent(source: Source):
 
 
 # ─── Normalization ──────────────────────────────────────────────────
+def _num(v) -> float | None:
+    """Coerce a coordinate value to float, returning None for blanks/invalid."""
+    if v in (None, "", 0, "0"):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize(raw: dict, source: Source) -> dict:
     """Project a legacy agent dict onto Lead model fields."""
     ext_id = str(
@@ -114,8 +124,8 @@ def _normalize(raw: dict, source: Source) -> dict:
         or raw.get("project_type")
         or raw.get("category", ""),
         "description": raw.get("description", ""),
-        "latitude": raw.get("latitude") or raw.get("lat"),
-        "longitude": raw.get("longitude") or raw.get("lng") or raw.get("lon"),
+        "latitude": _num(raw.get("latitude") or raw.get("lat")),
+        "longitude": _num(raw.get("longitude") or raw.get("lng") or raw.get("lon")),
         "contact_name": raw.get("contact_name") or raw.get("contractor_name", ""),
         "contact_company": raw.get("contact_company") or raw.get("contractor") or raw.get("company", ""),
         "contact_phone": raw.get("phone") or raw.get("contact_phone", ""),
