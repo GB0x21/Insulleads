@@ -22,7 +22,10 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
+from django.conf import settings
+
 from .adapter import LLMAdapter
+from .contract_analyzer import ContractAnalyzer
 from .prompts import (
     SYSTEM_EMAIL_WRITER,
     SYSTEM_ENRICHER,
@@ -232,6 +235,36 @@ class AnthropicAdapter(LLMAdapter):
 
         body = self._collect_text(response)
         return body or None
+
+    # ── 3b. analyze_contract ──────────────────────────────────────
+    def analyze_contract(
+        self, text: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Delegate to :class:`ContractAnalyzer` using the Anthropic client.
+
+        Model selection and parallelism come from ``settings.CONTRACTS``;
+        fall back to ``self._model_default`` for every role if the block
+        is missing so the adapter stays callable in test environments.
+        """
+        cfg = getattr(settings, "CONTRACTS", {}) or {}
+        analyzer = ContractAnalyzer(
+            self._client,
+            orchestrator_model=cfg.get("ORCHESTRATOR_MODEL") or self._model_default,
+            subagent_model=cfg.get("SUBAGENT_MODEL") or self._model_default,
+            synthesizer_model=cfg.get("SYNTHESIZER_MODEL") or self._model_default,
+            categories=cfg.get("CATEGORIES")
+            or [
+                "pricing",
+                "liability",
+                "termination",
+                "sla_performance",
+                "ip_confidentiality",
+                "governing_law",
+            ],
+            parallelism=int(cfg.get("SUBAGENT_PARALLELISM") or 4),
+            max_input_chars=int(cfg.get("MAX_INPUT_CHARS") or 600_000),
+        )
+        return analyzer.analyze(text, metadata=metadata)
 
     # ── 4. write_email ────────────────────────────────────────────
     def write_email(

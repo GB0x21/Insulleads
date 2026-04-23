@@ -122,6 +122,7 @@ class Source(models.Model):
         ("csv", "CSV import"),
         ("email_prospect", "Email prospect discovery"),
         ("scrapy", "Scrapy spider"),
+        ("contract_bids", "Contract bids (multi-provider)"),
     ]
 
     key = models.CharField(max_length=64, unique=True)
@@ -277,6 +278,8 @@ class Task(models.Model):
         OUTREACH = "outreach", "Send outreach for a lead"
         FOLLOW_UP = "follow_up", "Follow up after N days"
         EMAIL_PROSPECT = "email_prospect", "Send personalized email to prospect"
+        DISCOVER_CONTRACTS = "discover_contracts", "Discover open bids / RFPs"
+        ANALYZE_CONTRACT = "analyze_contract", "Multi-agent contract analysis"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -341,3 +344,88 @@ class Task(models.Model):
 
     def __str__(self) -> str:
         return f"{self.type}#{self.pk} [{self.status}]"
+
+
+# ─── Contract ───────────────────────────────────────────────────────
+class Contract(models.Model):
+    """A bid / RFP / contract discovered by a contract-discovery agent.
+
+    One-to-many with Lead: every Contract belongs to exactly one Lead
+    (the agency/buyer). Lifecycle:
+
+        DISCOVERED -> DOWNLOADED -> ANALYZING -> COMPLETED / FAILED
+    """
+
+    class Status(models.TextChoices):
+        DISCOVERED = "discovered", "Discovered"
+        DOWNLOADED = "downloaded", "Downloaded"
+        ANALYZING = "analyzing", "Analyzing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    class Recommendation(models.TextChoices):
+        SIGN = "sign", "Sign as-is"
+        NEGOTIATE = "negotiate", "Negotiate redlines"
+        REJECT = "reject", "Reject"
+
+    lead = models.ForeignKey(
+        Lead, on_delete=models.CASCADE, related_name="contracts"
+    )
+    source = models.ForeignKey(
+        Source,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="contracts",
+    )
+
+    # Origin
+    external_id = models.CharField(max_length=200, db_index=True)
+    provider = models.CharField(max_length=64, blank=True, default="")
+    source_url = models.URLField(max_length=1000, blank=True, default="")
+    title = models.CharField(max_length=500, blank=True, default="")
+    agency = models.CharField(max_length=300, blank=True, default="")
+    deadline = models.DateTimeField(blank=True, null=True)
+    estimated_value_usd = models.DecimalField(
+        max_digits=14, decimal_places=2, blank=True, null=True
+    )
+
+    # File
+    file_path = models.CharField(max_length=500, blank=True, default="")
+    file_hash = models.CharField(max_length=64, db_index=True, blank=True, default="")
+    file_size_bytes = models.BigIntegerField(default=0)
+
+    # State + results
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.DISCOVERED
+    )
+    scorecard = models.JSONField(default=dict, blank=True)
+    redlines = models.JSONField(default=list, blank=True)
+    recommendation = models.CharField(
+        max_length=20, choices=Recommendation.choices, blank=True, default=""
+    )
+    recommendation_reason = models.TextField(blank=True, default="")
+    raw_analysis = models.JSONField(default=dict, blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, default="")
+
+    discovered_at = models.DateTimeField(auto_now_add=True)
+    analyzed_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("source", "external_id")]
+        indexes = [
+            models.Index(
+                fields=["status", "-discovered_at"],
+                name="outreach_co_status_b6f7c7_idx",
+            ),
+            models.Index(
+                fields=["recommendation", "-analyzed_at"],
+                name="outreach_co_recomme_00ab17_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        label = self.title or self.external_id or f"contract#{self.pk}"
+        return f"{label} [{self.status}]"

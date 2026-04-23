@@ -70,6 +70,29 @@ class LLMAdapter(ABC):
         """Return ``{"subject": str, "body": str}`` for a cold prospect email,
         or ``None`` to skip sending. Body is plain text."""
 
+    def analyze_contract(
+        self, text: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Multi-agent contract review. Returns a dict shaped like::
+
+            {
+                "scorecard": {"pricing": 0-10, "liability": 0-10, ...},
+                "overall_score": 0-100,
+                "recommendation": "sign" | "negotiate" | "reject",
+                "recommendation_reason": "<str>",
+                "redlines": [
+                    {"category": str, "clause_text": str, "issue": str,
+                     "suggested_change": str, "severity": "low|med|high"}
+                ],
+                "sub_agent_outputs": {<category>: {...}},
+                "orchestrator_summary": "<str>",
+            }
+
+        Default implementation returns ``{}`` — subclasses that support
+        contract analysis (AnthropicAdapter) override this.
+        """
+        return {}
+
 
 class NoopAdapter(LLMAdapter):
     """Zero-dependency fallback. Always used when ``ANTHROPIC_API_KEY`` is
