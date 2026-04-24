@@ -30,7 +30,15 @@ logger = logging.getLogger("outreach.daemon")
 # ─── Task handler dispatch ─────────────────────────────────────────
 def _handlers() -> dict[str, Callable[[Task], None]]:
     # Imported lazily to avoid Django app-loading cycles.
-    from .tasks import discover, email_prospect_outreach, enrich, outreach, qualify
+    from .tasks import (
+        analyze_contract,
+        discover,
+        discover_contracts,
+        email_prospect_outreach,
+        enrich,
+        outreach,
+        qualify,
+    )
 
     return {
         Task.Type.DISCOVER: discover.handle,
@@ -39,6 +47,8 @@ def _handlers() -> dict[str, Callable[[Task], None]]:
         Task.Type.OUTREACH: outreach.handle,
         Task.Type.FOLLOW_UP: outreach.handle_follow_up,
         Task.Type.EMAIL_PROSPECT: email_prospect_outreach.handle,
+        Task.Type.DISCOVER_CONTRACTS: discover_contracts.handle,
+        Task.Type.ANALYZE_CONTRACT: analyze_contract.handle,
     }
 
 
@@ -50,16 +60,23 @@ def ensure_periodic_tasks() -> None:
     now = timezone.now()
 
     for source in Source.objects.filter(enabled=True):
+        # Contract-bid sources use a different task type — the handler
+        # persists Contract rows and enqueues analysis, not just Leads.
+        task_type = (
+            Task.Type.DISCOVER_CONTRACTS
+            if source.kind == "contract_bids"
+            else Task.Type.DISCOVER
+        )
         if not Task.objects.filter(
-            type=Task.Type.DISCOVER, source=source, status=Task.Status.PENDING
+            type=task_type, source=source, status=Task.Status.PENDING
         ).exists():
             Task.objects.create(
-                type=Task.Type.DISCOVER,
+                type=task_type,
                 campaign=source.campaign,
                 source=source,
                 scheduled_at=now,
             )
-            logger.info("[seed] discover queued for source=%s", source.key)
+            logger.info("[seed] %s queued for source=%s", task_type, source.key)
 
     for campaign in Campaign.objects.filter(is_active=True):
         periodic = [Task.Type.QUALIFY, Task.Type.OUTREACH, Task.Type.EMAIL_PROSPECT]

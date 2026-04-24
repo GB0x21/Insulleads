@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ActionLog, Campaign, Lead, SiteConfig, Source, Task
+from .models import ActionLog, Campaign, Contract, Lead, SiteConfig, Source, Task
 
 
 @admin.register(SiteConfig)
@@ -89,3 +89,30 @@ class TaskAdmin(admin.ModelAdmin):
     )
     list_filter = ("type", "status", "campaign")
     ordering = ("-scheduled_at",)
+
+
+@admin.register(Contract)
+class ContractAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "agency",
+        "provider",
+        "status",
+        "recommendation",
+        "deadline",
+        "analyzed_at",
+    )
+    list_filter = ("status", "recommendation", "provider")
+    search_fields = ("title", "external_id", "agency", "lead__title")
+    readonly_fields = (
+        "discovered_at",
+        "analyzed_at",
+        "updated_at",
+        "file_hash",
+        "file_size_bytes",
+        "scorecard",
+        "redlines",
+        "raw_analysis",
+        "raw_payload",
+    )

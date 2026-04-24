@@ -126,6 +126,53 @@ LLM = {
     "RAG_INDEX_PATH": os.getenv("LLM_RAG_INDEX_PATH", str(DATA_DIR / "rag_index")),
 }
 
+# ─── Contract discovery + analysis ──────────────────────────────────────
+# Multi-agent pipeline: discovery agents find open bids/RFPs on gov +
+# construction portals and via Claude web_search; each Contract row is
+# then analysed by the orchestrator + sub-agents in
+# `outreach/llm/contract_analyzer.py` which writes scorecard / redlines /
+# recommendation back to the row.
+_CONTRACT_DOCS_DIR = Path(os.getenv("CONTRACT_DOCS_DIR", str(DATA_DIR / "contracts")))
+_CONTRACT_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+
+CONTRACTS = {
+    "DISCOVERY_ENABLED": os.getenv("CONTRACT_DISCOVERY_ENABLED", "true").lower()
+    not in ("false", "0", "no"),
+    "ANALYSIS_ENABLED": os.getenv("CONTRACT_ANALYSIS_ENABLED", "true").lower()
+    not in ("false", "0", "no"),
+    "DOCS_DIR": str(_CONTRACT_DOCS_DIR),
+    "MAX_FILE_SIZE_MB": int(os.getenv("CONTRACT_MAX_FILE_SIZE_MB", "50")),
+    "DISCOVERY_INTERVAL_MIN": int(os.getenv("CONTRACT_DISCOVERY_INTERVAL_MIN", "360")),
+    # Providers
+    "SAM_GOV_API_KEY": os.getenv("SAM_GOV_API_KEY", ""),
+    "SAM_GOV_NAICS_CODES": [
+        c.strip() for c in os.getenv("SAM_GOV_NAICS_CODES", "238310,238990").split(",")
+        if c.strip()
+    ],
+    "WEB_SEARCH_ENABLED": os.getenv(
+        "WEB_SEARCH_DISCOVERY_ENABLED", "true"
+    ).lower() not in ("false", "0", "no"),
+    # Analyzer models
+    "ORCHESTRATOR_MODEL": os.getenv(
+        "CONTRACT_ORCHESTRATOR_MODEL", "claude-opus-4-6"
+    ),
+    "SUBAGENT_MODEL": os.getenv("CONTRACT_SUBAGENT_MODEL", "claude-haiku-4-5"),
+    "SYNTHESIZER_MODEL": os.getenv(
+        "CONTRACT_SYNTHESIZER_MODEL", "claude-opus-4-6"
+    ),
+    "SUBAGENT_PARALLELISM": int(os.getenv("CONTRACT_SUBAGENT_PARALLELISM", "4")),
+    "MAX_INPUT_CHARS": int(os.getenv("CONTRACT_MAX_INPUT_CHARS", "600000")),
+    "CATEGORIES": [
+        c.strip()
+        for c in os.getenv(
+            "CONTRACT_CATEGORIES",
+            "pricing,liability,termination,sla_performance,ip_confidentiality,governing_law",
+        ).split(",")
+        if c.strip()
+    ],
+}
+
+
 # ─── Thermal engine (outreach/thermal/) — Phase 1 ──────────────────────
 # The pipeline is offline: `python manage.py thermal_pull` hits Earth
 # Engine and writes per-building anomaly deltas to data/thermal/. The
