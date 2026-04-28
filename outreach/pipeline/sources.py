@@ -153,6 +153,35 @@ def _normalize(raw: dict, source: Source) -> dict:
     }
 
 
+# ─── Quality filter (post-fetch, pre-DB) ─────────────────────────────
+
+
+def _passes_quality_filter(raw: dict, source: Source) -> bool:
+    """Drop obviously-junk leads at the pipeline boundary so they never
+    create `Lead` rows.
+
+    Permits-kind sources reuse the legacy agent's blacklist
+    (:func:`agents.permits_agent._is_quality_permit`) which catches the
+    Code-Investigation / "PLAN A LOT N" / planning-only patterns that
+    sneak past the keyword whitelist. Every other kind passes through.
+    """
+    if source.kind != "permits":
+        return True
+    try:
+        from agents.permits_agent import _is_quality_permit
+    except ImportError:
+        return True
+    ok, reason = _is_quality_permit(raw)
+    if not ok:
+        logger.info(
+            "[pipeline] dropping %s lead %s: %s",
+            source.kind,
+            raw.get("id") or raw.get("permit_number") or "?",
+            reason,
+        )
+    return ok
+
+
 # ─── Public API ─────────────────────────────────────────────────────
 def fetch_source(source: Source) -> list[dict]:
     """Run the underlying agent and return normalized lead dicts."""
@@ -168,4 +197,8 @@ def fetch_source(source: Source) -> list[dict]:
         logger.exception("Source %s fetch failed: %s", source.kind, exc)
         raise
 
-    return [_normalize(r, source) for r in raw_leads if r]
+    return [
+        _normalize(r, source)
+        for r in raw_leads
+        if r and _passes_quality_filter(r, source)
+    ]
