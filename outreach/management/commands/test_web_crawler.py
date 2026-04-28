@@ -101,8 +101,24 @@ class Command(BaseCommand):
             default=0,
             help="Only print the first N leads (0 = all).",
         )
+        parser.add_argument(
+            "--inspect",
+            action="store_true",
+            help=(
+                "Fetch the URL, print a markdown excerpt and the most-frequent "
+                "CSS classes — handy for deriving a JsonCssExtractionStrategy "
+                "schema before enabling a Source. Skips extraction."
+            ),
+        )
 
     def handle(self, *args, **opts):
+        if opts["inspect"]:
+            urls = opts["url"]
+            if not urls:
+                raise CommandError("--inspect requires --url")
+            self._inspect(urls[0], http_only=not opts["no_http_only"])
+            return
+
         if opts["fixture"]:
             tmp = NamedTemporaryFile(
                 mode="w", suffix=".html", delete=False, encoding="utf-8"
@@ -142,3 +158,50 @@ class Command(BaseCommand):
                 f"addr={lead['address']!r}\n"
                 f"      website={lead.get('website', '')!r}  src={lead['source_url']}"
             )
+
+    # ─── --inspect helper ─────────────────────────────────────────────
+
+    def _inspect(self, url: str, *, http_only: bool) -> None:
+        """Fetch a URL with crawl4ai and print markdown + class frequencies."""
+        import asyncio
+        import re
+        from collections import Counter
+
+        try:
+            from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+        except ImportError as exc:
+            raise CommandError(
+                "crawl4ai is not installed — `pip install crawl4ai`."
+            ) from exc
+
+        async def _run() -> tuple[str, str]:
+            crawler_kwargs: dict = {}
+            if http_only:
+                from crawl4ai.async_crawler_strategy import AsyncHTTPCrawlerStrategy
+
+                crawler_kwargs["crawler_strategy"] = AsyncHTTPCrawlerStrategy()
+
+            async with AsyncWebCrawler(**crawler_kwargs) as crawler:
+                result = await crawler.arun(url=url, config=CrawlerRunConfig())
+                md = getattr(result, "markdown", "") or ""
+                # crawl4ai's markdown can be a MarkdownGenerationResult object
+                md = getattr(md, "raw_markdown", md) if not isinstance(md, str) else md
+                html = getattr(result, "cleaned_html", "") or getattr(result, "html", "") or ""
+                return str(md), str(html)
+
+        markdown, html = asyncio.run(_run())
+
+        self.stdout.write(self.style.NOTICE(f"\n=== markdown excerpt for {url} ===\n"))
+        self.stdout.write(markdown[:2000] or "<empty>")
+
+        # Sniff the 25 most frequent class= attribute values — a quick
+        # signal for which container class wraps repeating items.
+        classes = re.findall(r'class="([^"]+)"', html)
+        flat: list[str] = []
+        for c in classes:
+            flat.extend(c.split())
+        top = Counter(flat).most_common(25)
+
+        self.stdout.write(self.style.NOTICE("\n=== top 25 CSS classes ===\n"))
+        for cls, count in top:
+            self.stdout.write(f"  {count:5d}  .{cls}")

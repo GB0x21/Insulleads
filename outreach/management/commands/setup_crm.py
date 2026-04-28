@@ -6,6 +6,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from outreach.models import Campaign, SiteConfig, Source
+from outreach.seed_data.web_crawler_targets import iter_targets as _web_crawler_targets
 
 
 class Command(BaseCommand):
@@ -46,41 +47,18 @@ class Command(BaseCommand):
                 f"  {'+' if s_created else '='} source {src.key}"
             )
 
-        # Seed a disabled example for the crawl4ai-backed web_crawler kind so
-        # users can clone the row, swap urls/schema and enable it. Disabled
-        # by default — we don't ship a default target site.
-        example_key = "web_crawler_example"
-        web_src, w_created = Source.objects.get_or_create(
-            key=example_key,
-            defaults={
-                "kind": "web_crawler",
-                "campaign": campaign,
-                "interval_minutes": 360,
-                "enabled": False,
-                "config": {
-                    "urls": ["https://example.com/contractors"],
-                    "schema": {
-                        "name": "Contractors",
-                        "baseSelector": ".contractor-card",
-                        "fields": [
-                            {"name": "business_name", "selector": "h3",
-                             "type": "text"},
-                            {"name": "address", "selector": ".address",
-                             "type": "text"},
-                            {"name": "phone", "selector": ".phone",
-                             "type": "text"},
-                            {"name": "website", "selector": "a",
-                             "type": "attribute", "attribute": "href"},
-                        ],
-                    },
-                    "city_default": "San Francisco",
-                    "http_only": True,
-                },
-            },
-        )
-        self.stdout.write(
-            f"  {'+' if w_created else '='} source {web_src.key} "
-            f"(disabled — edit config and flip `enabled` to use)"
-        )
+        # Seed the curated catalog of crawl4ai targets (Bay Area
+        # contractor / energy-upgrade directories). All disabled by
+        # default — selectors should be verified with
+        # `manage.py test_web_crawler --inspect --url <url>` first.
+        for key, kind, defaults, rationale in _web_crawler_targets():
+            src, c_created = Source.objects.get_or_create(
+                key=key,
+                defaults={"kind": kind, "campaign": campaign, **defaults},
+            )
+            self.stdout.write(
+                f"  {'+' if c_created else '='} source {src.key} "
+                f"({'disabled' if not src.enabled else 'enabled'}) — {rationale}"
+            )
 
         self.stdout.write(self.style.SUCCESS("CRM bootstrap complete."))

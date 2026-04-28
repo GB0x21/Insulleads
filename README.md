@@ -158,9 +158,37 @@ python manage.py test_web_crawler --url https://example.com/contractors \
     --schema-file ./contractors_schema.json
 ```
 
-`make setup` (which calls `setup_crm`) seeds a disabled
-`web_crawler_example` Source — clone it via Django admin, plug in your
-real URLs and schema, and flip `enabled=True` to start crawling.
+`make setup` (which calls `setup_crm`) seeds a curated catalog of real
+Bay Area lead-gen targets as **disabled** Source rows — see
+`outreach/seed_data/web_crawler_targets.py`:
+
+| Source key                       | What it gives you                                                      |
+|----------------------------------|------------------------------------------------------------------------|
+| `bayren_home_plus`               | BayREN Home+ pre-vetted energy-upgrade contractors (Bay Area, 9 counties) |
+| `nari_sf_bay`                    | NARI SF Bay chapter members — remodelers / GCs that spec insulation    |
+| `build_it_green`                 | GreenPoint Rated professionals — green-building contractors and raters |
+| `energy_upgrade_ca`              | Energy Upgrade California participating contractors (statewide, filterable) |
+| `diamond_certified_insulation`   | Diamond Certified Bay Area insulation / HVAC / weatherization vendors  |
+
+Each schema is best-effort and marked `# VERIFY` — site markup changes
+regularly. Before flipping a source to `enabled=True`, run:
+
+```bash
+python manage.py test_web_crawler --inspect --url <URL>
+```
+
+`--inspect` fetches the page, prints a markdown excerpt and the
+25 most-frequent CSS classes, so you can pick the right `baseSelector`
+and field selectors. Then re-test with the live config:
+
+```bash
+python manage.py test_web_crawler \
+    --url <URL> \
+    --schema-file ./my_verified_schema.json \
+    --limit 5
+```
+
+Once happy, flip `enabled=True` from the Django admin or shell.
 
 ### Bayesian qualifier
 

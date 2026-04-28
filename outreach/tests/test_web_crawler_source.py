@@ -167,6 +167,28 @@ def test_fetch_leads_missing_crawl4ai_returns_empty():
     pytest.importorskip("crawl4ai", reason="crawl4ai not installed") is None,
     reason="needs crawl4ai",
 )
+def test_curated_targets_catalog_is_well_formed():
+    """Every seeded web_crawler target must have urls + a baseSelector."""
+    from outreach.seed_data.web_crawler_targets import WEB_CRAWLER_TARGETS
+
+    assert len(WEB_CRAWLER_TARGETS) >= 3, "expected at least a few real targets"
+    seen_keys = set()
+    for t in WEB_CRAWLER_TARGETS:
+        assert t["key"] not in seen_keys, f"duplicate key {t['key']}"
+        seen_keys.add(t["key"])
+        assert t["rationale"], f"{t['key']}: missing rationale"
+        cfg = t["config"]
+        assert cfg["urls"], f"{t['key']}: empty urls"
+        assert all(u.startswith("https://") for u in cfg["urls"]), (
+            f"{t['key']}: non-https url"
+        )
+        assert cfg["schema"]["baseSelector"], f"{t['key']}: missing baseSelector"
+        assert cfg["schema"]["fields"], f"{t['key']}: empty fields"
+        assert any(f["name"] == "business_name" for f in cfg["schema"]["fields"]), (
+            f"{t['key']}: schema is missing a business_name field"
+        )
+
+
 def test_live_http_only_crawl_against_local_fixture(tmp_path):
     """End-to-end with the real crawl4ai stack in http_only mode.
 
