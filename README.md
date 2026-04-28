@@ -103,7 +103,11 @@ validated rather than regex-parsed.
 - **Contact enrichment** *(`outreach/llm/client.py:enrich_contact`)* —
   fills missing phone / email / website / CSLB license using
   Anthropic's native `WebSearchTool`. Output type:
-  `EnrichmentResult`.
+  `EnrichmentResult`. Runs three ways: as a periodic daemon task
+  (`outreach/tasks/enrich.py`); inline as a *last-chance* attempt
+  inside the outreach loop so no Telegram message goes out without
+  contact data; and on demand via `python manage.py enrich_leads`
+  (see "Backfilling contact data" below).
 - **Cold-start qualifier** *(`qualify_lead`)* — scores a lead 0–1 with
   a one-sentence reason while the Gaussian-process qualifier still has
   fewer than 2 labels. Output type: `QualificationResult`.
@@ -131,6 +135,53 @@ python manage.py test_llm --feature all   # smoke-test all four methods
 Provider swap is a 3-line change: replace `AnthropicProvider` /
 `AnthropicModel` in `outreach/llm/client.py` with the OpenAI / Gemini /
 Groq equivalents — the prompts and typed outputs are reused as-is.
+
+#### Backfilling contact data
+
+The outreach loop will not send a Telegram message for a lead that has
+neither a phone nor an email — it tries enrichment one last time and,
+if that still comes up empty, leaves the lead in `QUALIFIED` for the
+next attempt. Every result lands in `Lead.enrichment_log`:
+
+```jsonc
+{
+  "status": "ok" | "empty",
+  "adapter": "anthropic",
+  "attempts": 2,
+  "last_attempt_at": "2026-04-28T14:00:00+00:00",
+  // ...payload fields when status=ok...
+}
+```
+
+`status="empty"` leads are retried automatically after
+`ENRICH_RETRY_HOURS` (default 24h), up to `ENRICH_MAX_ATTEMPTS`
+(default 3). Tunables live in `OUTREACH` (`outreach/django_settings.py`):
+
+```bash
+ENRICH_INTERVAL_MIN=30          # daemon enrich tick
+ENRICH_RETRY_HOURS=24           # cooldown for status=empty
+ENRICH_MAX_ATTEMPTS=3           # give up after this many empty attempts
+ENRICH_INLINE_ON_OUTREACH=true  # last-chance attempt inside outreach.handle
+```
+
+For ad-hoc backfills (e.g. leads imported before the enricher existed
+or stuck at `status=empty`):
+
+```bash
+# Best-effort, respects cooldown — safe to run anytime.
+python manage.py enrich_leads --campaign "Bay Area Insulation" --limit 100
+
+# Spot-check a single lead, ignoring the cooldown:
+python manage.py enrich_leads --lead-id 42 --force
+
+# Force-retry every empty-log lead in the campaign (each call costs an
+# Anthropic web_search invocation — use with a sane --limit):
+python manage.py enrich_leads --campaign "Bay Area Insulation" \
+    --status empty --force --limit 25
+
+# Dry run — list what would be enriched without calling the LLM:
+python manage.py enrich_leads --campaign "Bay Area Insulation" --dry-run
+```
 
 ### CRM, dashboard and contract analysis
 

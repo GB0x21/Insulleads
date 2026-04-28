@@ -195,6 +195,10 @@ def _send(lead: Lead, campaign: Campaign) -> str:
     return ActionLog.Action.TELEGRAM
 
 
+def _has_contact(lead: Lead) -> bool:
+    return bool(lead.contact_phone or lead.contact_email)
+
+
 def handle(task: Task) -> None:
     campaign = task.campaign
     budget = campaign.max_outreach_per_day - _sent_today(campaign)
@@ -203,19 +207,55 @@ def handle(task: Task) -> None:
         task.reschedule(minutes=60)
         return
 
+    # Pull a wider batch than the budget — we may skip some leads that
+    # still have no contact data after a last-chance enrichment attempt.
     batch = list(
         Lead.objects.filter(
             campaign=campaign,
             stage=Lead.Stage.QUALIFIED,
         )
-        .order_by("-qualification_score", "-lead_score")[:budget]
+        .order_by("-qualification_score", "-lead_score")[: budget * 3]
     )
     if not batch:
         task.reschedule(minutes=settings.OUTREACH["OUTREACH_INTERVAL_MIN"])
         return
 
+    inline_enrich = (
+        settings.OUTREACH.get("ENRICH_INLINE_ON_OUTREACH", True)
+        and campaign.llm_enricher_enabled
+    )
+
     sent = 0
+    skipped_no_contact = 0
     for lead in batch:
+        if sent >= budget:
+            break
+
+        # Last-chance enrichment: don't waste outreach budget on a
+        # message the operator can't act on. The enricher respects its
+        # own cooldown so this is cheap when nothing's changed.
+        if not _has_contact(lead) and inline_enrich:
+            from outreach.tasks.enrich import enrich_one
+
+            try:
+                enrich_one(lead)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[outreach] inline enrich failed for lead=%s: %s",
+                    lead.pk,
+                    exc,
+                )
+            lead.refresh_from_db(fields=["contact_phone", "contact_email",
+                                         "contact_name", "contact_company",
+                                         "contact_source"])
+
+        if not _has_contact(lead):
+            skipped_no_contact += 1
+            # Lead stays QUALIFIED — the next enrich tick (or a manual
+            # `manage.py enrich_leads --lead-id …`) will retry until the
+            # cooldown / max-attempts policy gives up.
+            continue
+
         try:
             action = _send(lead, campaign)
         except Exception as exc:  # noqa: BLE001
@@ -231,7 +271,12 @@ def handle(task: Task) -> None:
         lead.advance(Lead.Stage.CONTACTED)
         sent += 1
 
-    logger.info("[outreach] campaign=%s sent=%d", campaign.name, sent)
+    logger.info(
+        "[outreach] campaign=%s sent=%d skipped_no_contact=%d",
+        campaign.name,
+        sent,
+        skipped_no_contact,
+    )
     task.reschedule(minutes=settings.OUTREACH["OUTREACH_INTERVAL_MIN"])
 
 

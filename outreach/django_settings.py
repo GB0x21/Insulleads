@@ -92,6 +92,11 @@ OUTREACH = {
     "QUALIFY_INTERVAL_MIN": int(os.getenv("QUALIFY_INTERVAL_MIN", "15")),
     "OUTREACH_INTERVAL_MIN": int(os.getenv("OUTREACH_INTERVAL_MIN", "5")),
     "ENRICH_INTERVAL_MIN": int(os.getenv("ENRICH_INTERVAL_MIN", "30")),
+    "ENRICH_RETRY_HOURS": int(os.getenv("ENRICH_RETRY_HOURS", "24")),
+    "ENRICH_MAX_ATTEMPTS": int(os.getenv("ENRICH_MAX_ATTEMPTS", "3")),
+    "ENRICH_INLINE_ON_OUTREACH": os.getenv(
+        "ENRICH_INLINE_ON_OUTREACH", "true"
+    ).lower() in ("1", "true", "yes"),
     "MAX_OUTREACH_PER_DAY": int(os.getenv("MAX_OUTREACH_PER_DAY", "200")),
     "EMAIL_PROSPECT_INTERVAL_MIN": int(os.getenv("EMAIL_PROSPECT_INTERVAL_MIN", "30")),
     "MAX_EMAIL_PROSPECT_PER_DAY": int(os.getenv("MAX_EMAIL_PROSPECT_PER_DAY", "50")),
