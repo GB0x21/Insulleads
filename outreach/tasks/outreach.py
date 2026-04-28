@@ -58,6 +58,103 @@ def _format_message(lead: Lead) -> str:
     return "\n".join(parts)
 
 
+# Keys we look at, in order, when extracting a "source URL" from the
+# lead's raw payload. Different agents store this under different names.
+_RAW_URL_KEYS = (
+    "source_url",
+    "url",
+    "permit_url",
+    "permit_link",
+    "yelp_url",
+    "places_url",
+    "listing_url",
+    "detail_url",
+    "website",
+)
+
+
+def _extract_source_url(lead: Lead) -> str:
+    raw = lead.raw or {}
+    for key in _RAW_URL_KEYS:
+        val = raw.get(key)
+        if isinstance(val, str) and val.startswith(("http://", "https://")):
+            return val
+    return ""
+
+
+def _format_context_block(lead: Lead) -> str:
+    """Compact, single-message footer with the actionable info the LLM
+    prose intentionally leaves out: contact data, scores, source URL, id.
+
+    Designed to be appended after the LLM-written outreach copy with a
+    visual separator so the operator can copy/paste the prose and still
+    see who to call without leaving Telegram."""
+    where_bits: list[str] = []
+    if lead.address:
+        where_bits.append(lead.address)
+    if lead.city:
+        where_bits.append(lead.city)
+    where = ", ".join(where_bits) or "—"
+
+    proj_bits: list[str] = []
+    if lead.project_type:
+        proj_bits.append(lead.project_type)
+    if lead.project_value:
+        proj_bits.append(f"${lead.project_value:,.0f}")
+    proj = " · ".join(proj_bits)
+
+    lines: list[str] = ["──────────", f"🏗️ {where}" + (f" · {proj}" if proj else "")]
+
+    # Contact: company / name plus phone / email on the next line.
+    company = lead.contact_company or lead.contact_name
+    if company:
+        if lead.contact_company and lead.contact_name:
+            lines.append(f"👤 {lead.contact_company} — {lead.contact_name}")
+        else:
+            lines.append(f"👤 {company}")
+
+    contact_bits: list[str] = []
+    if lead.contact_phone:
+        contact_bits.append(f"📞 {lead.contact_phone}")
+    if lead.contact_email:
+        contact_bits.append(f"✉️ {lead.contact_email}")
+    if contact_bits:
+        lines.append("  ".join(contact_bits))
+    elif not company:
+        lines.append("👤 (no contact data — run enrichment)")
+
+    if lead.contact_source:
+        lines.append(f"🔎 Contact via: {lead.contact_source}")
+
+    # Scores
+    score_bits: list[str] = []
+    if lead.qualification_score is not None:
+        score_bits.append(
+            f"🧠 {lead.qualification_score:.2f}"
+            f" (σ²={lead.qualification_variance or 0:.2f})"
+        )
+    score_bits.append(f"🔥 {lead.lead_score}/100")
+    score_bits.append(f"📡 {lead.source.kind}")
+    lines.append(" · ".join(score_bits))
+
+    if lead.llm_qualification_reason:
+        reason = lead.llm_qualification_reason.strip()
+        if len(reason) > 200:
+            reason = reason[:200] + "…"
+        lines.append(f"💬 {reason}")
+
+    src_url = _extract_source_url(lead)
+    if src_url:
+        # Telegram trims very long URLs visually; keep the full one for
+        # click-through but truncate the display side defensively.
+        display = src_url if len(src_url) <= 120 else src_url[:117] + "…"
+        lines.append(f"↪︎ {display}")
+
+    lines.append(f"#L{lead.pk}")
+    return "\n".join(lines)
+
+
+
 def _resolve_body(lead: Lead, campaign: Campaign) -> str:
     """Pick an outreach body: cached LLM copy → fresh LLM copy → template."""
     if lead.llm_outreach_body:
@@ -86,7 +183,13 @@ def _send(lead: Lead, campaign: Campaign) -> str:
     from utils.telegram import send_message
 
     body = _resolve_body(lead, campaign)
-    ok = send_message(body)
+    context = _format_context_block(lead)
+    # The LLM-written prose is the pitch the operator might paste into
+    # an email/SMS; the context block below the separator is the
+    # actionable lead data (contact, scores, source URL, lead id) so
+    # they don't have to leave Telegram to act on it.
+    message = f"{body}\n\n{context}"
+    ok = send_message(message)
     if not ok:
         raise RuntimeError("telegram send failed")
     return ActionLog.Action.TELEGRAM
