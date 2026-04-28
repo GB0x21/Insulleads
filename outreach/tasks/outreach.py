@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 
 from django.conf import settings
-from django.db.models import Q
 from django.utils import timezone
 
 from outreach.llm import get_adapter
@@ -101,14 +100,11 @@ def handle(task: Task) -> None:
         task.reschedule(minutes=60)
         return
 
-    # Only send leads that have at least a phone or email — skip until
-    # the enrich task has had a chance to populate contact data.
     batch = list(
         Lead.objects.filter(
             campaign=campaign,
             stage=Lead.Stage.QUALIFIED,
         )
-        .filter(Q(contact_phone__gt="") | Q(contact_email__gt=""))
         .order_by("-qualification_score", "-lead_score")[:budget]
     )
     if not batch:
