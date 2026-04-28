@@ -46,6 +46,30 @@ mix and match them in a single campaign.
 
 These run unmodified out of the box; just toggle `AGENT_*` env vars.
 
+**Quality filters on permit-style leads.** `agents/permits_agent.py`
+applies a value floor (`MIN_PERMIT_VALUE`, default $50k), a recency
+window (`PERMIT_MONTHS`, default 3) and a *blacklist* that drops
+non-construction noise that would otherwise sneak past the keyword
+whitelist:
+
+- Enforcement permits — Code Investigation / Code Compliance / complaints.
+- Planning-only approvals — San Jose's `PLAN A (BEMP …) LOT N` master
+  plans, subdivision / tentative / final maps, lot-line adjustments.
+- Out-of-trade scope — fences, signs, pool-only, landscape-only, tree
+  removal, demolition-only.
+- Stale dates — leads whose `issued_date` is unparseable now drop
+  (pre-v9 they passed through, which let years-old records through any
+  time the upstream agency served a non-ISO date).
+
+The `notify` Telegram block also hides "next inspection" rows when the
+helper returned a date in the past or an enforcement-type visit (which
+is what produced the 4/10/2018 "Code Investigation" header in early
+operator messages).
+
+The same blacklist is applied at the Django pipeline boundary
+(`outreach/pipeline/sources.py`) so junk permits never become `Lead`
+rows there either.
+
 - **Building permits**, **active construction**, **deconstruction/demo**
   and **real-estate sales** via Socrata / CKAN endpoints across the nine
   Bay Area counties (`agents/{permits,construction,deconstruction,

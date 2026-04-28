@@ -629,7 +629,124 @@ INSULATION_KEYWORDS = [
 ]
 
 
-# ── CSLB fallback ──────────────────────────────────────────────────
+# ─── Quality filters (anti-junk) ────────────────────────────────────
+# These run after `_is_relevant` and drop leads that match a positive
+# keyword by accident (e.g. "new construction" in a "PLAN A LOT N"
+# planning-stage permit). Each pattern is matched as a substring against
+# the lower-cased combined permit_type + description haystack.
+
+# Permit type patterns that indicate the permit is NOT actual building
+# work — enforcement actions, planning-only approvals, status checks,
+# or scope-of-trade work that's outside our cross-sell.
+_NON_CONSTRUCTION_PERMIT_TYPES = (
+    "code investigation",
+    "code compliance",
+    "code enforcement",
+    "complaint",
+    "no entry",
+    "courtesy inspection",
+    "plan check only",
+    "plan review only",
+    "plan a (",        # San Jose "PLAN A (BEMP …) LOT N" — master plan only
+    "plan b (",
+    "plan c (",
+    "site plan",
+    "subdivision",
+    "tentative map",
+    "final map",
+    "lot line",
+    "fence",
+    "sign permit",
+    "pool only",
+    "spa only",
+    "driveway only",
+    "landscape only",
+    "tree removal",
+    "demolition only",
+)
+
+# Description patterns that override an otherwise-matching keyword.
+# Conservative — only matches when the description is essentially _just_
+# the bad-pattern phrase, not when it's mentioned alongside real scope.
+_NON_CONSTRUCTION_DESCRIPTIONS = (
+    "code investigation",
+    "code compliance",
+    "code enforcement",
+    "no entry",
+    "no action",
+    "investigation only",
+)
+
+
+# Inspection types that mean an enforcement / non-construction visit —
+# advertising these as a "site visit window" is what surfaced the
+# 4/10/2018 Code Investigation in the operator's Telegram.
+_ENFORCEMENT_INSPECTION_TYPES = (
+    "code investigation",
+    "code compliance",
+    "code enforcement",
+    "complaint",
+    "no entry",
+    "courtesy",
+    "no action",
+)
+
+
+def _is_enforcement_inspection(visit: dict) -> bool:
+    itype = (visit.get("type") or "").lower()
+    return any(p in itype for p in _ENFORCEMENT_INSPECTION_TYPES)
+
+
+def _is_future_inspection(visit: dict) -> bool:
+    """True iff `visit['best_visit']` parses to today-or-later. The
+    helper produces strings like 'Wed 4/10/2018, 7:00 AM - 10:00 AM' —
+    we extract the date token and reuse `_parse_date`."""
+    txt = (visit.get("best_visit") or "").strip()
+    if not txt:
+        return False
+    # Pull out the slashed-date token.
+    m = re.search(r"(\d{1,2}/\d{1,2}/\d{2,4})", txt)
+    if not m:
+        # Helper sometimes serves an ISO timestamp directly.
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", txt)
+        if not m:
+            return False
+    parsed = _parse_date(m.group(1))
+    if not parsed:
+        return False
+    return parsed.date() >= datetime.utcnow().date()
+
+
+def _is_quality_permit(lead: dict) -> tuple[bool, str]:
+    """Return (passes, reason). Drops:
+
+      - Enforcement permits (Code Investigation, complaints, …).
+      - Planning-only / lot-approval permits (San Jose "PLAN A LOT N").
+      - Out-of-trade scope (fences, signs, pool-only, landscape-only, …).
+
+    The legacy `_is_relevant` is whitelist-only, so a lead whose
+    description happens to contain "new construction" passes even when
+    the permit_type is "PLAN A (BEMP 100%) LOT 16". This adds the
+    blacklist."""
+    permit_type = (lead.get("permit_type") or "").lower()
+    description = (lead.get("description") or "").lower().strip()
+
+    for pat in _NON_CONSTRUCTION_PERMIT_TYPES:
+        if pat in permit_type:
+            return False, f"permit_type matches '{pat}'"
+
+    # Description-only check — only fires when the description IS the
+    # bad pattern (length-bounded so "blah code compliance work" still
+    # passes).
+    if description and len(description) <= 60:
+        for pat in _NON_CONSTRUCTION_DESCRIPTIONS:
+            if pat in description:
+                return False, f"description matches '{pat}'"
+
+    return True, ""
+
+
+# ─── CSLB fallback ──────────────────────────────────────────────────
 _CSLB_URL = "https://www2.cslb.ca.gov/OnlineServices/CheckLicenseII/CheckLicense.aspx"
 _CSLB_HDR = {"User-Agent": "Mozilla/5.0 (compatible; LeadBot/1.0)"}
 
@@ -775,14 +892,39 @@ def _is_relevant(lead: dict) -> bool:
 
 
 def _is_recent(lead: dict) -> bool:
-    date_str = lead.get("issued_date") or lead.get("filed_date") or ""
+    """True iff issued_date is parseable AND within PERMIT_MONTHS.
+
+    We try several formats because the upstream agencies serve dates in
+    different shapes (ISO, US slashed, with/without a time component).
+    Unparseable dates return False — pre-v9 we returned True on parse
+    failure, which let stale leads sneak through any time the source
+    served a non-ISO format."""
+    date_str = (lead.get("issued_date") or lead.get("filed_date") or "").strip()
     if not date_str:
-        return True
-    try:
-        issued = datetime.strptime(date_str[:10], "%Y-%m-%d")
-        return issued >= (datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS))
-    except Exception:
-        return True
+        return False
+    issued = _parse_date(date_str)
+    if not issued:
+        return False
+    return issued >= (datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS))
+
+
+def _parse_date(text: str) -> datetime | None:
+    """Best-effort multi-format date parser. Tries ISO (with/without
+    time), US-slashed (`m/d/Y` or `m/d/y`), and ISO-with-T."""
+    if not text:
+        return None
+    text = text.strip()
+    # ISO timestamp — keep first 10 chars.
+    candidates = (text[:10], text[:19], text)
+    fmts = ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+            "%m/%d/%Y", "%-m/%-d/%Y", "%m/%d/%y", "%-m/%-d/%y")
+    for cand in candidates:
+        for fmt in fmts:
+            try:
+                return datetime.strptime(cand, fmt)
+            except (ValueError, TypeError):
+                continue
+    return None
 
 
 # ── AGENTE ─────────────────────────────────────────────────────────
@@ -876,17 +1018,31 @@ class PermitsAgent(BaseAgent):
                     continue
 
                 city_n = 0
+                rejected_quality = 0
+                rejected_stale = 0
                 for raw in records:
                     lead = _normalize_permit(raw, source["field_map"], city)
-                    if _is_relevant(lead) and _is_recent(lead):
-                        lead.update(self._enrich_gc(lead))
-                        all_leads.append(lead)
-                        city_n += 1
+                    if not _is_relevant(lead):
+                        continue
+                    if not _is_recent(lead):
+                        rejected_stale += 1
+                        continue
+                    quality_ok, reason = _is_quality_permit(lead)
+                    if not quality_ok:
+                        rejected_quality += 1
+                        logger.debug("[%s] dropped %s: %s",
+                                     city, lead.get("id"), reason)
+                        continue
+                    lead.update(self._enrich_gc(lead))
+                    all_leads.append(lead)
+                    city_n += 1
 
                 logger.info(
                     f"[{city}] {len(records)} registros → "
                     f"{city_n} leads (>${MIN_PERMIT_VALUE/1000:.0f}K, "
-                    f"últimos {PERMIT_MONTHS} meses)"
+                    f"últimos {PERMIT_MONTHS} meses; "
+                    f"dropped: {rejected_stale} stale, "
+                    f"{rejected_quality} non-construction)"
                 )
 
         return all_leads
@@ -915,16 +1071,23 @@ class PermitsAgent(BaseAgent):
             if lead.get("cslb_status"):
                 fields["✅ Estado Licencia"]   = lead["cslb_status"]
 
-        # Lookup inspection schedule for visit timing
+        # Lookup inspection schedule for visit timing. Drop the block if
+        # the helper returned a stale (in-the-past) or unparseable date,
+        # AND drop blocks whose `type` field reads as enforcement —
+        # otherwise we end up advertising "🔍 Code Investigation" as a
+        # site-visit window, which is exactly the junk lead the operator
+        # sees on Telegram.
         visit = get_next_visit_window(lead)
-        if visit:
+        visit_is_useful = bool(visit) and _is_future_inspection(visit) \
+            and not _is_enforcement_inspection(visit)
+        if visit_is_useful:
             lead["_next_inspection"] = visit
             fields["🗓️ Proxima Inspeccion"] = visit.get("best_visit", "")
             if visit.get("type"):
                 fields["🔍 Tipo Inspeccion"] = visit["type"]
 
         cta = "📲 Contacta al GC y ofrece insulación para el proyecto"
-        if visit:
+        if visit_is_useful:
             cta = f"📲 Visita la obra: {visit.get('best_visit', '')} — el GC estara en sitio"
 
         send_lead(
