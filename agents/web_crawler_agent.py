@@ -26,8 +26,15 @@ when called standalone), so the agent itself stays generic:
       },
       "city_default": "San Francisco",
       "max_concurrent": 4,
-      "timeout_s": 60
+      "timeout_s": 60,
+      "http_only": false
     }
+
+When `http_only=True`, the agent uses `AsyncHTTPCrawlerStrategy` (pure
+aiohttp, no Playwright/Chromium) — much faster for static / server-rendered
+HTML, and the only viable mode in environments where Chromium isn't
+available. Default is `http_only=False`, which uses the full Playwright
+stack so JS-rendered sites work too.
 
 When `crawl4ai` is not installed, `fetch_leads()` logs a warning and returns
 an empty list, matching the soft-fail pattern used by the rest of the agent
@@ -82,12 +89,14 @@ class WebCrawlerAgent:
         city_default: str = "",
         max_concurrent: int = 4,
         timeout_s: int = 60,
+        http_only: bool = False,
     ) -> None:
         self.urls = list(urls or [])
         self.schema = schema or {}
         self.city_default = city_default
         self.max_concurrent = max(1, int(max_concurrent))
         self.timeout_s = max(5, int(timeout_s))
+        self.http_only = bool(http_only)
 
     # ─── Public API (matches BaseAgent contract) ──────────────────────
 
@@ -130,10 +139,23 @@ class WebCrawlerAgent:
         strategy = JsonCssExtractionStrategy(self.schema)
         run_config = CrawlerRunConfig(extraction_strategy=strategy)
 
+        crawler_kwargs: dict[str, Any] = {}
+        if self.http_only:
+            try:
+                from crawl4ai.async_crawler_strategy import (  # type: ignore[import-not-found]
+                    AsyncHTTPCrawlerStrategy,
+                )
+                crawler_kwargs["crawler_strategy"] = AsyncHTTPCrawlerStrategy()
+            except ImportError:
+                logger.warning(
+                    "[web_crawler] http_only=True but AsyncHTTPCrawlerStrategy "
+                    "is unavailable — falling back to default Playwright strategy."
+                )
+
         sem = asyncio.Semaphore(self.max_concurrent)
         leads: list[dict[str, Any]] = []
 
-        async with AsyncWebCrawler() as crawler:
+        async with AsyncWebCrawler(**crawler_kwargs) as crawler:
             async def _one(url: str) -> list[dict[str, Any]]:
                 async with sem:
                     try:

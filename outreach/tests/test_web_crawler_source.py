@@ -158,3 +158,58 @@ def test_fetch_leads_missing_crawl4ai_returns_empty():
     )
     with patch.object(builtins, "__import__", side_effect=_fail_crawl4ai):
         assert agent.fetch_leads() == []
+
+
+# ─── Live integration (http_only, no Chromium) ────────────────────────
+
+
+@pytest.mark.skipif(
+    pytest.importorskip("crawl4ai", reason="crawl4ai not installed") is None,
+    reason="needs crawl4ai",
+)
+def test_live_http_only_crawl_against_local_fixture(tmp_path):
+    """End-to-end with the real crawl4ai stack in http_only mode.
+
+    This needs no network and no Chromium — `AsyncHTTPCrawlerStrategy` reads
+    the `file://` URL via aiohttp and the agent normalizes the extraction.
+    """
+    fixture = tmp_path / "contractors.html"
+    fixture.write_text(
+        """
+        <!doctype html><html><body>
+          <div class="card">
+            <h3>Acme Insulation</h3>
+            <span class="addr">123 Main St</span>
+            <span class="tel">555-0001</span>
+          </div>
+          <div class="card">
+            <h3>Beta Roofing</h3>
+            <span class="addr">456 Oak Ave</span>
+            <span class="tel">555-0002</span>
+          </div>
+        </body></html>
+        """,
+        encoding="utf-8",
+    )
+
+    agent = WebCrawlerAgent(
+        urls=[f"file://{fixture}"],
+        schema={
+            "name": "Cards",
+            "baseSelector": ".card",
+            "fields": [
+                {"name": "business_name", "selector": "h3", "type": "text"},
+                {"name": "address", "selector": ".addr", "type": "text"},
+                {"name": "phone", "selector": ".tel", "type": "text"},
+            ],
+        },
+        city_default="San Francisco",
+        http_only=True,
+    )
+    leads = agent.fetch_leads()
+
+    assert len(leads) == 2
+    names = {l["business_name"] for l in leads}
+    assert names == {"Acme Insulation", "Beta Roofing"}
+    assert all(l["city"] == "San Francisco" for l in leads)
+    assert all(l["id"].startswith("web_") for l in leads)

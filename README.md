@@ -132,14 +132,35 @@ as `Source.kind="web_crawler"` and is fully driven by `Source.config`:
        "attribute": "href"}
     ]
   },
-  "city_default": "San Francisco"
+  "city_default": "San Francisco",
+  "http_only": true
 }
 ```
 
-`crawl4ai` is optional: if it isn't installed the agent logs a warning
-and returns 0 leads, so the daemon stays runnable on a fresh box. After
-`pip install crawl4ai`, run `crawl4ai-setup` once to install the
-Playwright Chromium build.
+Two crawl modes:
+
+- **`http_only: true`** *(recommended for static sites)* — uses
+  `AsyncHTTPCrawlerStrategy` (pure aiohttp, no browser). Fastest, runs in
+  any environment, no Chromium required. Use for server-rendered HTML.
+- **`http_only: false`** *(default)* — uses the full Playwright stack.
+  Required for JS-rendered sites. Needs Chromium: after
+  `pip install crawl4ai`, run `crawl4ai-setup` (or
+  `python -m playwright install chromium`) once.
+
+`crawl4ai` itself is optional: if it isn't installed the agent logs a
+warning and returns 0 leads, so the daemon stays runnable on a fresh box.
+
+Smoke-test the agent without touching the daemon:
+
+```bash
+python manage.py test_web_crawler --fixture
+python manage.py test_web_crawler --url https://example.com/contractors \
+    --schema-file ./contractors_schema.json
+```
+
+`make setup` (which calls `setup_crm`) seeds a disabled
+`web_crawler_example` Source — clone it via Django admin, plug in your
+real URLs and schema, and flip `enabled=True` to start crawling.
 
 ### Bayesian qualifier
 

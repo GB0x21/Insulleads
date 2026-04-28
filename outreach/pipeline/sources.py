@@ -75,6 +75,7 @@ def _get_agent(source: Source):
             city_default=config.get("city_default", ""),
             max_concurrent=config.get("max_concurrent", 4),
             timeout_s=config.get("timeout_s", 60),
+            http_only=bool(config.get("http_only", False)),
         )
         _AGENT_CACHE[cache_key] = backend
         return backend

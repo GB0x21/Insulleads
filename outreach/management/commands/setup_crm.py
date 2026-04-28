@@ -45,4 +45,42 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"  {'+' if s_created else '='} source {src.key}"
             )
+
+        # Seed a disabled example for the crawl4ai-backed web_crawler kind so
+        # users can clone the row, swap urls/schema and enable it. Disabled
+        # by default — we don't ship a default target site.
+        example_key = "web_crawler_example"
+        web_src, w_created = Source.objects.get_or_create(
+            key=example_key,
+            defaults={
+                "kind": "web_crawler",
+                "campaign": campaign,
+                "interval_minutes": 360,
+                "enabled": False,
+                "config": {
+                    "urls": ["https://example.com/contractors"],
+                    "schema": {
+                        "name": "Contractors",
+                        "baseSelector": ".contractor-card",
+                        "fields": [
+                            {"name": "business_name", "selector": "h3",
+                             "type": "text"},
+                            {"name": "address", "selector": ".address",
+                             "type": "text"},
+                            {"name": "phone", "selector": ".phone",
+                             "type": "text"},
+                            {"name": "website", "selector": "a",
+                             "type": "attribute", "attribute": "href"},
+                        ],
+                    },
+                    "city_default": "San Francisco",
+                    "http_only": True,
+                },
+            },
+        )
+        self.stdout.write(
+            f"  {'+' if w_created else '='} source {web_src.key} "
+            f"(disabled — edit config and flip `enabled` to use)"
+        )
+
         self.stdout.write(self.style.SUCCESS("CRM bootstrap complete."))
