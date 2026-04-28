@@ -36,6 +36,121 @@ agent and starts the task-queue loop.
 
 ---
 
+## What you can do now
+
+After `make setup`, the daemon exposes the following capabilities. Each
+one is wired through the same `Source` / `Lead` / `Task` model so you can
+mix and match them in a single campaign.
+
+### Lead discovery — public-data APIs (no scraping required)
+
+These run unmodified out of the box; just toggle `AGENT_*` env vars.
+
+- **Building permits**, **active construction**, **deconstruction/demo**
+  and **real-estate sales** via Socrata / CKAN endpoints across the nine
+  Bay Area counties (`agents/{permits,construction,deconstruction,
+  realestate}_agent.py`).
+- **Solar installs** (NREL, OpenEI), **NOAA flood alerts**,
+  **energy benchmarking**, **311 rodent reports** —
+  `agents/{solar,flood,energy,rodents}_agent.py`.
+- **Yelp Fusion** + **Google Places** contractor lookups —
+  `agents/{yelp,places}_agent.py`.
+- **Thermal anomalies** from Landsat (Earth Engine) —
+  `agents/thermal_agent.py`.
+- **Email-prospect** discovery via Hunter.io / Apollo.io / CSV cache —
+  `agents/email_prospect_agent.py`.
+
+### Lead discovery — Scrapy spiders
+
+For HTML-only targets that don't have an API. The daemon runs spiders
+in subprocesses so a crash never takes down the worker.
+
+- **CSLB contractor license lookup** — the only spider shipped today
+  (`scrapy_crawlers/spiders/cslb_contractors.py`). Add more by writing a
+  spider and creating a `Source` row of `kind="scrapy"` with the spider
+  name in `config.spider`.
+
+### Lead discovery — crawl4ai web crawler *(new)*
+
+LLM-friendly extraction from contractor directories that have neither
+an API nor stable selectors. Driven entirely by `Source.config`, so
+adding a new target is "drop a JSON schema, flip `enabled=True`."
+
+- **Five real Bay Area targets** seeded as disabled `Source` rows by
+  `make setup` — see `outreach/seed_data/web_crawler_targets.py`:
+  BayREN Home+, NARI SF Bay, Build It Green / GreenPoint Rated,
+  Energy Upgrade California, Diamond Certified.
+- **Two crawl modes**: `http_only=True` (pure aiohttp, no Chromium) for
+  static pages, and `http_only=False` (Playwright) for JS-rendered
+  sites.
+- **Schema discovery helper**: `python manage.py test_web_crawler
+  --inspect --url <URL>` fetches the page, dumps a markdown excerpt and
+  the 25 most-frequent CSS classes so you can write a working schema in
+  minutes.
+- **Soft-fails** when `crawl4ai` isn't installed — the daemon keeps
+  running and just returns 0 leads for the source.
+
+See the "Web crawler (crawl4ai)" subsection below for the full schema
+example and the verification workflow.
+
+### LLM layer — typed, multi-capability *(rebuilt on pydantic-ai)*
+
+Three LLM-powered features sit on top of the pipeline. The whole stack
+runs through pydantic-ai with the Anthropic provider and typed
+output models in `outreach/llm/schemas.py`, so structured outputs are
+validated rather than regex-parsed.
+
+- **Contact enrichment** *(`outreach/llm/client.py:enrich_contact`)* —
+  fills missing phone / email / website / CSLB license using
+  Anthropic's native `WebSearchTool`. Output type:
+  `EnrichmentResult`.
+- **Cold-start qualifier** *(`qualify_lead`)* — scores a lead 0–1 with
+  a one-sentence reason while the Gaussian-process qualifier still has
+  fewer than 2 labels. Output type: `QualificationResult`.
+- **Outreach copy** *(`write_outreach`)* — drafts the Telegram-bound
+  first-touch message; pulls in PG&E / Title 24 / ENERGY STAR snippets
+  from the RAG index when available. Output type: `OutreachMessage`.
+- **Cold email writer** *(`write_email`)* — `EmailDraft(subject, body)`
+  for prospects discovered by the email-prospect agent.
+- **Multi-agent contract analyzer**
+  *(`outreach/llm/contract_analyzer.py`)* — orchestrator + N parallel
+  sub-agents + synthesizer. Each role is its own typed `pydantic_ai.
+  Agent`; sub-agents run in parallel via a thread-pool. Returns
+  `FinalReview(scorecard, recommendation, redlines)`.
+
+Backend selection via `LLM_ADAPTER` (`anthropic` *(default)* / `noop` /
+`suna`-stub). Per-campaign toggles
+(`Campaign.llm_{enricher,qualifier,writer}_enabled`) live in the
+Django admin.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+python manage.py test_llm --feature all   # smoke-test all four methods
+```
+
+Provider swap is a 3-line change: replace `AnthropicProvider` /
+`AnthropicModel` in `outreach/llm/client.py` with the OpenAI / Gemini /
+Groq equivalents — the prompts and typed outputs are reused as-is.
+
+### CRM, dashboard and contract analysis
+
+- **Django admin + minimal CRM** at `/` and `/admin/` —
+  Won/Replied/Lost buttons retrain the per-campaign GP qualifier.
+- **Streamlit dashboard** at `make dashboard` (`http://localhost:8501`)
+  — pydeck map of geocoded leads, stage funnel, sortable lead table.
+- **Contract / RFP discovery + analysis** — `python manage.py
+  discover_contracts` pulls from SAM.gov + Anthropic web_search; the
+  multi-agent analyzer above produces a scorecard you can review at
+  `/admin/outreach/contract/`.
+
+### Outreach channels
+
+Telegram / SendGrid / Twilio (see `utils/notifications.py`). Per-campaign
+daily budget enforced via `Campaign.max_outreach_per_day` and tracked in
+`ActionLog`.
+
+---
+
 ## Mapping to OpenOutreach
 
 | OpenOutreach concept              | Insulleads equivalent                                   |
@@ -94,6 +209,7 @@ normalises the output onto the `Lead` model:
 | energy        | `EnergyAgent`                |
 | places        | `PlacesAgent`                |
 | yelp          | `YelpAgent`                  |
+| web_crawler   | `WebCrawlerAgent` (crawl4ai) |
 
 Enable/disable with env vars (unchanged from the original project):
 
@@ -109,6 +225,85 @@ AGENT_ENERGY=true
 AGENT_PLACES=false
 AGENT_YELP=false
 ```
+
+#### Web crawler (crawl4ai)
+
+`agents/web_crawler_agent.py` wraps
+[crawl4ai](https://github.com/unclecode/crawl4ai) to scrape contractor
+directories and association pages that don't expose an API. It's exposed
+as `Source.kind="web_crawler"` and is fully driven by `Source.config`:
+
+```json
+{
+  "urls": ["https://example.com/contractors"],
+  "schema": {
+    "name": "Contractors",
+    "baseSelector": ".contractor-card",
+    "fields": [
+      {"name": "business_name", "selector": "h3", "type": "text"},
+      {"name": "address",       "selector": ".addr", "type": "text"},
+      {"name": "phone",         "selector": ".tel",  "type": "text"},
+      {"name": "website",       "selector": "a",     "type": "attribute",
+       "attribute": "href"}
+    ]
+  },
+  "city_default": "San Francisco",
+  "http_only": true
+}
+```
+
+Two crawl modes:
+
+- **`http_only: true`** *(recommended for static sites)* — uses
+  `AsyncHTTPCrawlerStrategy` (pure aiohttp, no browser). Fastest, runs in
+  any environment, no Chromium required. Use for server-rendered HTML.
+- **`http_only: false`** *(default)* — uses the full Playwright stack.
+  Required for JS-rendered sites. Needs Chromium: after
+  `pip install crawl4ai`, run `crawl4ai-setup` (or
+  `python -m playwright install chromium`) once.
+
+`crawl4ai` itself is optional: if it isn't installed the agent logs a
+warning and returns 0 leads, so the daemon stays runnable on a fresh box.
+
+Smoke-test the agent without touching the daemon:
+
+```bash
+python manage.py test_web_crawler --fixture
+python manage.py test_web_crawler --url https://example.com/contractors \
+    --schema-file ./contractors_schema.json
+```
+
+`make setup` (which calls `setup_crm`) seeds a curated catalog of real
+Bay Area lead-gen targets as **disabled** Source rows — see
+`outreach/seed_data/web_crawler_targets.py`:
+
+| Source key                       | What it gives you                                                      |
+|----------------------------------|------------------------------------------------------------------------|
+| `bayren_home_plus`               | BayREN Home+ pre-vetted energy-upgrade contractors (Bay Area, 9 counties) |
+| `nari_sf_bay`                    | NARI SF Bay chapter members — remodelers / GCs that spec insulation    |
+| `build_it_green`                 | GreenPoint Rated professionals — green-building contractors and raters |
+| `energy_upgrade_ca`              | Energy Upgrade California participating contractors (statewide, filterable) |
+| `diamond_certified_insulation`   | Diamond Certified Bay Area insulation / HVAC / weatherization vendors  |
+
+Each schema is best-effort and marked `# VERIFY` — site markup changes
+regularly. Before flipping a source to `enabled=True`, run:
+
+```bash
+python manage.py test_web_crawler --inspect --url <URL>
+```
+
+`--inspect` fetches the page, prints a markdown excerpt and the
+25 most-frequent CSS classes, so you can pick the right `baseSelector`
+and field selectors. Then re-test with the live config:
+
+```bash
+python manage.py test_web_crawler \
+    --url <URL> \
+    --schema-file ./my_verified_schema.json \
+    --limit 5
+```
+
+Once happy, flip `enabled=True` from the Django admin or shell.
 
 ### Bayesian qualifier
 
@@ -166,10 +361,17 @@ python manage.py test_llm --feature all
 
 Supported backends (`LLM_ADAPTER` in `.env`):
 
-- `anthropic` *(default)* — uses the official `anthropic` SDK with
-  prompt caching on the campaign prefix and `web_search` for
-  enrichment. Falls back automatically to `noop` when the API key is
-  missing, so the daemon is still runnable on a fresh box.
+- `anthropic` *(default)* — backed by [pydantic-ai](https://ai.pydantic.dev)
+  with the Anthropic provider. Each adapter method goes through a typed
+  `pydantic_ai.Agent` with a Pydantic `output_type` (see
+  `outreach/llm/schemas.py`), so structured outputs are validated rather
+  than regex-parsed. Prompt caching on the system instructions
+  (`anthropic_cache_instructions=True`) and the native Anthropic
+  `WebSearchTool` for enrichment are wired in. The raw
+  `anthropic.Anthropic` client stays exposed at `adapter._client` so
+  callers that need the SDK directly (e.g. contract discovery's web
+  search) keep working. Falls back automatically to `noop` when the API
+  key is missing.
 - `suna` — **stub** for running [Suna](https://github.com/kortix-ai/suna)
   as a sidecar container. See [`docs/SUNA_INTEGRATION.md`](docs/SUNA_INTEGRATION.md)
   for the integration playbook.

@@ -1,25 +1,29 @@
 """
-Anthropic client wrapper — the default :class:`LLMAdapter` implementation.
+Default :class:`LLMAdapter` implementation, backed by pydantic-ai with
+the Anthropic provider.
 
-Uses the official ``anthropic`` Python SDK. All three methods are thin glue
-around :meth:`anthropic.Anthropic.messages.create` with prompt caching on
-the campaign context, plus a single JSON-parsing helper.
+Each call site (enricher / qualifier / writer / email writer) goes
+through a typed :class:`pydantic_ai.Agent` with a Pydantic ``output_type``,
+so we never parse JSON by hand and validation errors surface as
+exceptions instead of silent garbage.
+
+We still keep an ``anthropic.Anthropic`` instance at ``self._client``
+because two code paths reach into the raw SDK:
+
+  * :mod:`agents.contract_discovery.web_search` uses the native Anthropic
+    ``web_search_20250305`` tool to fan out queries.
+  * The contract analyzer (:mod:`outreach.llm.contract_analyzer`) shares
+    the same provider so its 8 calls (orchestrator + 6 sub-agents +
+    synthesizer) reuse one HTTP connection pool.
 
 Model defaults (overridable per-campaign via env):
 
-  * ``LLM_MODEL``           — qualifier + writer (default: ``claude-opus-4-6``).
-  * ``LLM_ENRICH_MODEL``    — contact enrichment (default: same as above;
-                              feel free to downgrade to Haiku for volume).
-
-The web-search tool is enabled on the enricher call. We use the current
-``web_search_20250305`` tool name, which is the GA version at the time of
-writing; bump it when Anthropic releases a newer one.
+  * ``LLM_MODEL``        — qualifier + writer (default: ``claude-opus-4-6``).
+  * ``LLM_ENRICH_MODEL`` — contact enrichment.
 """
 from __future__ import annotations
 
-import json
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
@@ -35,6 +39,12 @@ from .prompts import (
     lead_payload,
 )
 from .rag import get_default_index
+from .schemas import (
+    EmailDraft,
+    EnrichmentResult,
+    OutreachMessage,
+    QualificationResult,
+)
 
 if TYPE_CHECKING:
     from outreach.models import Campaign, Lead
@@ -43,17 +53,30 @@ logger = logging.getLogger("outreach.llm.client")
 
 
 class AnthropicAdapter(LLMAdapter):
-    """Thin wrapper over the Anthropic Python SDK."""
+    """pydantic-ai-backed adapter (provider: Anthropic).
+
+    The class name is kept for backward-compat — it's imported by
+    :func:`outreach.llm.adapter.get_adapter` and referenced in tests
+    that look up adapter type by name. The implementation underneath
+    is pure pydantic-ai.
+    """
 
     name = "anthropic"
 
     def __init__(self, cfg: dict[str, Any]) -> None:
         try:
-            import anthropic  # noqa: F401
+            from anthropic import Anthropic
         except ImportError as exc:  # pragma: no cover - surfaced by get_adapter
             raise RuntimeError(
                 "anthropic SDK not installed. Add `anthropic>=0.39.0` "
                 "to requirements/base.txt or `pip install anthropic`."
+            ) from exc
+        try:
+            from pydantic_ai.providers.anthropic import AnthropicProvider
+        except ImportError as exc:
+            raise RuntimeError(
+                "pydantic-ai-slim[anthropic] not installed. Add "
+                "`pydantic-ai-slim[anthropic]>=1.0,<2.0` to requirements/base.txt."
             ) from exc
 
         api_key = cfg.get("ANTHROPIC_API_KEY")
@@ -63,18 +86,77 @@ class AnthropicAdapter(LLMAdapter):
                 "to LLM_ADAPTER=noop."
             )
 
-        from anthropic import Anthropic
-
+        # Raw Anthropic client — kept as a public attribute so callers
+        # that need the native SDK (web_search tool, etc.) can use it.
         self._client = Anthropic(api_key=api_key)
-        self._model_default = cfg.get("MODEL") or "claude-opus-4-6"
-        self._model_enrich = cfg.get("ENRICH_MODEL") or self._model_default
+        # pydantic-ai provider sharing the same HTTP client.
+        self._provider = AnthropicProvider(anthropic_client=self._client)
+
+        self._model_default_id = cfg.get("MODEL") or "claude-opus-4-6"
+        self._model_enrich_id = cfg.get("ENRICH_MODEL") or self._model_default_id
         self._max_tokens = int(cfg.get("MAX_TOKENS") or 1024)
 
-    # ── shared helpers ────────────────────────────────────────────
+        # Per-(role, campaign) Agent cache — Agents are cheap to build
+        # but caching avoids recomputing the system prompt on every call.
+        self._agents: dict[str, Any] = {}
+
+    def close(self) -> None:
+        """Release the underlying HTTP connection pool. Optional in
+        long-running processes (the daemon) but useful in test fixtures
+        so sockets don't leak between cases."""
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "close"):
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+    # ─── Agent factory ────────────────────────────────────────────────
+
+    def _agent(
+        self,
+        cache_key: str,
+        model_id: str,
+        system: str,
+        output_type,
+        max_tokens: int,
+        builtin_tools: tuple = (),
+    ):
+        if cache_key in self._agents:
+            return self._agents[cache_key]
+
+        from pydantic_ai import Agent
+        from pydantic_ai.models.anthropic import (
+            AnthropicModel,
+            AnthropicModelSettings,
+        )
+
+        model = AnthropicModel(model_id, provider=self._provider)
+        model_settings = AnthropicModelSettings(
+            max_tokens=max_tokens,
+            anthropic_cache_instructions=True,
+        )
+        agent = Agent(
+            model,
+            output_type=output_type,
+            system_prompt=system,
+            model_settings=model_settings,
+            builtin_tools=builtin_tools,
+        )
+        self._agents[cache_key] = agent
+        return agent
+
+    # ─── Shared helpers ───────────────────────────────────────────────
+
     def _retrieve_references(self, lead: "Lead") -> str:
         """Pull top-k RAG snippets for this lead and format them for
-        injection into the writer's user message. Empty string when
-        the RAG index is a no-op or retrieval fails."""
+        injection into the writer's user message."""
         try:
             index = get_default_index()
         except Exception as exc:  # noqa: BLE001
@@ -94,164 +176,125 @@ class AnthropicAdapter(LLMAdapter):
             return ""
         return "\n".join(f"- {s.format()}" for s in snippets)
 
-    def _cached_system(self, body: str) -> list[dict[str, Any]]:
-        """Return a system-block list with one cache breakpoint at the end."""
-        return [
-            {
-                "type": "text",
-                "text": body,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
+    # ─── 1. enrich_contact ────────────────────────────────────────────
 
-    def _collect_text(self, response) -> str:
-        """Concatenate all text blocks from a Messages response."""
-        out = []
-        for block in response.content:
-            # SDK returns typed blocks; text blocks carry `.text`.
-            text = getattr(block, "text", None)
-            if text:
-                out.append(text)
-        return "".join(out).strip()
-
-    def _parse_json(self, text: str) -> dict[str, Any] | None:
-        """Accept either raw JSON or JSON embedded in prose."""
-        text = text.strip()
-        if not text:
-            return None
-        # Fast path
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-        # Strip ```json fences
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                return None
-        return None
-
-    # ── 1. enrich_contact ─────────────────────────────────────────
     def enrich_contact(self, lead: "Lead") -> dict[str, Any]:
-        user_prompt = (
+        from pydantic_ai.builtin_tools import WebSearchTool
+
+        agent = self._agent(
+            cache_key="enrich",
+            model_id=self._model_enrich_id,
+            system=SYSTEM_ENRICHER,
+            output_type=EnrichmentResult,
+            max_tokens=self._max_tokens,
+            builtin_tools=(WebSearchTool(max_uses=5),),
+        )
+        user = (
             "Enrich the following construction lead. Use web search to find "
             "the contractor's business phone, email, website, and CSLB "
             "license number.\n\n"
             f"{lead_payload(lead)}\n\n"
-            "Respond with a single JSON object using any subset of these "
-            'keys: {"website": str, "contact_phone": str, "contact_email": '
-            'str, "contact_name": str, "contact_company": str, "cslb_license":'
-            ' str, "linkedin": str, "notes": str}. Omit keys you could not '
-            "verify. Do not guess."
+            "Fill any subset of the schema fields. Omit fields you could "
+            "not verify — never guess."
         )
         try:
-            response = self._client.messages.create(
-                model=self._model_enrich,
-                max_tokens=self._max_tokens,
-                system=self._cached_system(SYSTEM_ENRICHER),
-                tools=[
-                    {
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": 5,
-                    }
-                ],
-                messages=[{"role": "user", "content": user_prompt}],
-            )
+            result = agent.run_sync(user)
         except Exception as exc:  # noqa: BLE001
             logger.warning("enrich_contact failed for lead=%s: %s", lead.pk, exc)
             return {}
 
-        parsed = self._parse_json(self._collect_text(response))
-        if not isinstance(parsed, dict):
-            logger.info("enrich_contact: no JSON for lead=%s", lead.pk)
+        out = result.output
+        if not isinstance(out, EnrichmentResult):
             return {}
-        return parsed
+        # Only return non-empty fields so the merge into the Lead model
+        # mirrors the previous "omit unknown keys" semantics.
+        payload = out.model_dump()
+        return {k: v for k, v in payload.items() if v}
 
-    # ── 2. qualify_lead ───────────────────────────────────────────
+    # ─── 2. qualify_lead ──────────────────────────────────────────────
+
     def qualify_lead(
         self, lead: "Lead", campaign: "Campaign"
     ) -> tuple[float | None, str]:
-        system_body = f"{SYSTEM_QUALIFIER}\n\n{campaign_prefix(campaign)}"
-        user_prompt = (
-            "Score this lead. Return JSON only.\n\n"
+        agent = self._agent(
+            cache_key=f"qualify:{campaign.pk}",
+            model_id=self._model_default_id,
+            system=f"{SYSTEM_QUALIFIER}\n\n{campaign_prefix(campaign)}",
+            output_type=QualificationResult,
+            max_tokens=256,
+        )
+        user = (
+            "Score this lead. Return a structured QualificationResult.\n\n"
             f"{lead_payload(lead)}"
         )
         try:
-            response = self._client.messages.create(
-                model=self._model_default,
-                max_tokens=256,
-                system=self._cached_system(system_body),
-                messages=[{"role": "user", "content": user_prompt}],
-            )
+            result = agent.run_sync(user)
         except Exception as exc:  # noqa: BLE001
             logger.warning("qualify_lead failed for lead=%s: %s", lead.pk, exc)
             return (None, "")
 
-        parsed = self._parse_json(self._collect_text(response))
-        if not isinstance(parsed, dict):
+        out = result.output
+        if not isinstance(out, QualificationResult):
             return (None, "")
-        try:
-            score = float(parsed.get("score"))
-        except (TypeError, ValueError):
-            return (None, "")
-        score = max(0.0, min(1.0, score))
-        reason = str(parsed.get("reason") or "")[:500]
+        score = max(0.0, min(1.0, float(out.score)))
+        reason = (out.reason or "")[:500]
         return (score, reason)
 
-    # ── 3. write_outreach ─────────────────────────────────────────
+    # ─── 3. write_outreach ────────────────────────────────────────────
+
     def write_outreach(
         self, lead: "Lead", campaign: "Campaign"
     ) -> str | None:
         tone = getattr(campaign, "outreach_tone", "professional") or "professional"
         booking = campaign.booking_link or ""
-        system_body = (
+        system = (
             f"{SYSTEM_WRITER}\n\n"
             f"Tone: {tone}.\n"
             f"Booking link (optional, include only if natural): "
             f"{booking or '(none)'}\n\n"
             f"{campaign_prefix(campaign)}"
         )
+        agent = self._agent(
+            cache_key=f"writer:{campaign.pk}:{tone}",
+            model_id=self._model_default_id,
+            system=system,
+            output_type=OutreachMessage,
+            max_tokens=600,
+        )
         references_block = self._retrieve_references(lead)
-        user_prompt = (
-            "Draft the outreach message for this lead. Output ONLY the "
-            "message body.\n\n"
+        user = (
+            "Draft the outreach message for this lead. Output only the "
+            "message body in the `body` field.\n\n"
             f"{lead_payload(lead)}"
         )
         if references_block:
-            user_prompt += f"\n\nReferences:\n{references_block}"
+            user += f"\n\nReferences:\n{references_block}"
+
         try:
-            response = self._client.messages.create(
-                model=self._model_default,
-                max_tokens=600,
-                system=self._cached_system(system_body),
-                messages=[{"role": "user", "content": user_prompt}],
-            )
+            result = agent.run_sync(user)
         except Exception as exc:  # noqa: BLE001
             logger.warning("write_outreach failed for lead=%s: %s", lead.pk, exc)
             return None
 
-        body = self._collect_text(response)
+        out = result.output
+        if not isinstance(out, OutreachMessage):
+            return None
+        body = (out.body or "").strip()
         return body or None
 
-    # ── 3b. analyze_contract ──────────────────────────────────────
+    # ─── 3b. analyze_contract ─────────────────────────────────────────
+
     def analyze_contract(
         self, text: str, metadata: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Delegate to :class:`ContractAnalyzer` using the Anthropic client.
-
-        Model selection and parallelism come from ``settings.CONTRACTS``;
-        fall back to ``self._model_default`` for every role if the block
-        is missing so the adapter stays callable in test environments.
-        """
+        """Delegate to :class:`ContractAnalyzer` — uses the same provider
+        so all 8 calls share one HTTP connection pool."""
         cfg = getattr(settings, "CONTRACTS", {}) or {}
         analyzer = ContractAnalyzer(
-            self._client,
-            orchestrator_model=cfg.get("ORCHESTRATOR_MODEL") or self._model_default,
-            subagent_model=cfg.get("SUBAGENT_MODEL") or self._model_default,
-            synthesizer_model=cfg.get("SYNTHESIZER_MODEL") or self._model_default,
+            provider=self._provider,
+            orchestrator_model=cfg.get("ORCHESTRATOR_MODEL") or self._model_default_id,
+            subagent_model=cfg.get("SUBAGENT_MODEL") or self._model_default_id,
+            synthesizer_model=cfg.get("SYNTHESIZER_MODEL") or self._model_default_id,
             categories=cfg.get("CATEGORIES")
             or [
                 "pricing",
@@ -266,45 +309,47 @@ class AnthropicAdapter(LLMAdapter):
         )
         return analyzer.analyze(text, metadata=metadata)
 
-    # ── 4. write_email ────────────────────────────────────────────
+    # ─── 4. write_email ───────────────────────────────────────────────
+
     def write_email(
         self, lead: "Lead", campaign: "Campaign"
     ) -> dict[str, str] | None:
-        """Return {"subject": str, "body": str} for a cold prospect email,
-        or None on failure. Body is plain text; the caller wraps it in HTML."""
         tone = getattr(campaign, "outreach_tone", "professional") or "professional"
         booking = campaign.booking_link or ""
-        system_body = (
+        system = (
             f"{SYSTEM_EMAIL_WRITER}\n\n"
             f"Tone: {tone}.\n"
             f"Booking/Calendly link (include only if natural): "
             f"{booking or '(none)'}\n\n"
             f"{campaign_prefix(campaign)}"
         )
+        agent = self._agent(
+            cache_key=f"email:{campaign.pk}:{tone}",
+            model_id=self._model_default_id,
+            system=system,
+            output_type=EmailDraft,
+            max_tokens=700,
+        )
         references_block = self._retrieve_references(lead)
-        user_prompt = (
-            "Write the cold-prospect email for this lead. "
-            "Output ONLY the JSON object.\n\n"
+        user = (
+            "Write the cold-prospect email for this lead. Return both "
+            "`subject` and `body` fields.\n\n"
             f"{lead_payload(lead)}"
         )
         if references_block:
-            user_prompt += f"\n\nReferences:\n{references_block}"
+            user += f"\n\nReferences:\n{references_block}"
+
         try:
-            response = self._client.messages.create(
-                model=self._model_default,
-                max_tokens=700,
-                system=self._cached_system(system_body),
-                messages=[{"role": "user", "content": user_prompt}],
-            )
+            result = agent.run_sync(user)
         except Exception as exc:  # noqa: BLE001
             logger.warning("write_email failed for lead=%s: %s", lead.pk, exc)
             return None
 
-        parsed = self._parse_json(self._collect_text(response))
-        if not isinstance(parsed, dict):
+        out = result.output
+        if not isinstance(out, EmailDraft):
             return None
-        subject = str(parsed.get("subject") or "").strip()[:255]
-        body = str(parsed.get("body") or "").strip()
+        subject = (out.subject or "").strip()[:255]
+        body = (out.body or "").strip()
         if not subject or not body:
             return None
         return {"subject": subject, "body": body}

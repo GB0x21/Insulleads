@@ -14,6 +14,12 @@ schedule>=1.2.0
 scrapy>=2.11,<3.0
 itemadapter>=0.8
 
+# crawl4ai web-crawler agent (agents/web_crawler_agent.py, kind="web_crawler").
+# Optional — the agent logs a warning and returns 0 leads when crawl4ai is
+# missing, so installs without it still run. After installing, run
+# `crawl4ai-setup` once to install Playwright's Chromium.
+crawl4ai>=0.4
+
 # ML qualifier — GP (legacy) + LightGBM primary (Phase 2)
 numpy>=1.26
 scikit-learn>=1.4
@@ -21,8 +27,12 @@ lightgbm>=4.0
 
 # LLM layer (outreach/llm/) — optional: the daemon falls back to a
 # NoopAdapter when ANTHROPIC_API_KEY is missing, so installs without
-# this package still run.
+# this package still run. The layer is built on pydantic-ai for typed
+# structured outputs; we keep the raw `anthropic` SDK around because a
+# couple of code paths (agents/contract_discovery, RAG-less fallbacks)
+# reach the underlying client directly via `adapter._client`.
 anthropic>=0.39.0
+pydantic-ai-slim[anthropic]>=1.0,<2.0
 
 # RAG layer (outreach/llm/rag.py) — optional: the writer falls back
 # to unreferenced copy when llama_index is missing or the index is

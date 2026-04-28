@@ -6,6 +6,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from outreach.models import Campaign, SiteConfig, Source
+from outreach.seed_data.web_crawler_targets import iter_targets as _web_crawler_targets
 
 
 class Command(BaseCommand):
@@ -45,4 +46,19 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"  {'+' if s_created else '='} source {src.key}"
             )
+
+        # Seed the curated catalog of crawl4ai targets (Bay Area
+        # contractor / energy-upgrade directories). All disabled by
+        # default — selectors should be verified with
+        # `manage.py test_web_crawler --inspect --url <url>` first.
+        for key, kind, defaults, rationale in _web_crawler_targets():
+            src, c_created = Source.objects.get_or_create(
+                key=key,
+                defaults={"kind": kind, "campaign": campaign, **defaults},
+            )
+            self.stdout.write(
+                f"  {'+' if c_created else '='} source {src.key} "
+                f"({'disabled' if not src.enabled else 'enabled'}) — {rationale}"
+            )
+
         self.stdout.write(self.style.SUCCESS("CRM bootstrap complete."))
