@@ -123,6 +123,7 @@ class Source(models.Model):
         ("email_prospect", "Email prospect discovery"),
         ("scrapy", "Scrapy spider"),
         ("contract_bids", "Contract bids (multi-provider)"),
+        ("web_crawler", "Web crawler (crawl4ai)"),
     ]
 
     key = models.CharField(max_length=64, unique=True)

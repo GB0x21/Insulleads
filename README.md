@@ -94,6 +94,7 @@ normalises the output onto the `Lead` model:
 | energy        | `EnergyAgent`                |
 | places        | `PlacesAgent`                |
 | yelp          | `YelpAgent`                  |
+| web_crawler   | `WebCrawlerAgent` (crawl4ai) |
 
 Enable/disable with env vars (unchanged from the original project):
 
@@ -109,6 +110,36 @@ AGENT_ENERGY=true
 AGENT_PLACES=false
 AGENT_YELP=false
 ```
+
+#### Web crawler (crawl4ai)
+
+`agents/web_crawler_agent.py` wraps
+[crawl4ai](https://github.com/unclecode/crawl4ai) to scrape contractor
+directories and association pages that don't expose an API. It's exposed
+as `Source.kind="web_crawler"` and is fully driven by `Source.config`:
+
+```json
+{
+  "urls": ["https://example.com/contractors"],
+  "schema": {
+    "name": "Contractors",
+    "baseSelector": ".contractor-card",
+    "fields": [
+      {"name": "business_name", "selector": "h3", "type": "text"},
+      {"name": "address",       "selector": ".addr", "type": "text"},
+      {"name": "phone",         "selector": ".tel",  "type": "text"},
+      {"name": "website",       "selector": "a",     "type": "attribute",
+       "attribute": "href"}
+    ]
+  },
+  "city_default": "San Francisco"
+}
+```
+
+`crawl4ai` is optional: if it isn't installed the agent logs a warning
+and returns 0 leads, so the daemon stays runnable on a fresh box. After
+`pip install crawl4ai`, run `crawl4ai-setup` once to install the
+Playwright Chromium build.
 
 ### Bayesian qualifier
 

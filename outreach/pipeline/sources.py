@@ -55,6 +55,30 @@ def _get_agent(source: Source):
         _AGENT_CACHE[cache_key] = backend
         return backend
 
+    # Web-crawler sources (crawl4ai) are also config-driven and cached
+    # per-key so two web_crawler sources can target different sites.
+    if kind == "web_crawler":
+        cache_key = f"web_crawler:{source.key}"
+        if cache_key in _AGENT_CACHE:
+            return _AGENT_CACHE[cache_key]
+        from agents.web_crawler_agent import WebCrawlerAgent
+
+        config = source.config or {}
+        urls = config.get("urls") or []
+        if not urls:
+            raise ValueError(
+                f"Source {source.key!r} is kind=web_crawler but config.urls is empty"
+            )
+        backend = WebCrawlerAgent(
+            urls=urls,
+            schema=config.get("schema") or {},
+            city_default=config.get("city_default", ""),
+            max_concurrent=config.get("max_concurrent", 4),
+            timeout_s=config.get("timeout_s", 60),
+        )
+        _AGENT_CACHE[cache_key] = backend
+        return backend
+
     if kind in _AGENT_CACHE:
         return _AGENT_CACHE[kind]
 
