@@ -246,10 +246,17 @@ python manage.py test_llm --feature all
 
 Supported backends (`LLM_ADAPTER` in `.env`):
 
-- `anthropic` *(default)* — uses the official `anthropic` SDK with
-  prompt caching on the campaign prefix and `web_search` for
-  enrichment. Falls back automatically to `noop` when the API key is
-  missing, so the daemon is still runnable on a fresh box.
+- `anthropic` *(default)* — backed by [pydantic-ai](https://ai.pydantic.dev)
+  with the Anthropic provider. Each adapter method goes through a typed
+  `pydantic_ai.Agent` with a Pydantic `output_type` (see
+  `outreach/llm/schemas.py`), so structured outputs are validated rather
+  than regex-parsed. Prompt caching on the system instructions
+  (`anthropic_cache_instructions=True`) and the native Anthropic
+  `WebSearchTool` for enrichment are wired in. The raw
+  `anthropic.Anthropic` client stays exposed at `adapter._client` so
+  callers that need the SDK directly (e.g. contract discovery's web
+  search) keep working. Falls back automatically to `noop` when the API
+  key is missing.
 - `suna` — **stub** for running [Suna](https://github.com/kortix-ai/suna)
   as a sidecar container. See [`docs/SUNA_INTEGRATION.md`](docs/SUNA_INTEGRATION.md)
   for the integration playbook.

@@ -27,8 +27,12 @@ lightgbm>=4.0
 
 # LLM layer (outreach/llm/) — optional: the daemon falls back to a
 # NoopAdapter when ANTHROPIC_API_KEY is missing, so installs without
-# this package still run.
+# this package still run. The layer is built on pydantic-ai for typed
+# structured outputs; we keep the raw `anthropic` SDK around because a
+# couple of code paths (agents/contract_discovery, RAG-less fallbacks)
+# reach the underlying client directly via `adapter._client`.
 anthropic>=0.39.0
+pydantic-ai-slim[anthropic]>=1.0,<2.0
 
 # RAG layer (outreach/llm/rag.py) — optional: the writer falls back
 # to unreferenced copy when llama_index is missing or the index is
