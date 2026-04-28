@@ -22,7 +22,7 @@ from outreach.models import Lead, Task
 
 logger = logging.getLogger("outreach.tasks.enrich")
 
-ENRICH_BATCH_SIZE = 20
+ENRICH_BATCH_SIZE = 50
 
 # Allowed keys in the enricher payload, matched to Lead fields.
 _FIELD_MAP = {
@@ -34,9 +34,40 @@ _FIELD_MAP = {
 
 
 def _needs_enrichment() -> Q:
-    return (
-        Q(contact_phone="") | Q(contact_email="")
-    ) & Q(enrichment_log={})
+    missing_contact = Q(contact_phone="") | Q(contact_email="")
+    # Leads not yet attempted
+    not_yet_attempted = Q(enrichment_log={})
+    # Leads where enrichment ran and found contact data, but write-back failed
+    has_recoverable_phone = (
+        Q(enrichment_log__contact_phone__isnull=False)
+        & ~Q(enrichment_log__contact_phone="")
+    )
+    has_recoverable_email = (
+        Q(enrichment_log__contact_email__isnull=False)
+        & ~Q(enrichment_log__contact_email="")
+    )
+    has_recoverable = has_recoverable_phone | has_recoverable_email
+    return missing_contact & (not_yet_attempted | has_recoverable)
+
+
+def _recover_from_log(lead: Lead) -> bool:
+    """Write contact fields from an existing enrichment_log. Returns True if anything changed."""
+    log = lead.enrichment_log or {}
+    if log.get("status") != "ok":
+        return False
+    dirty = ["updated_at"]
+    for key, field in _FIELD_MAP.items():
+        value = (log.get(key) or "").strip()
+        if value and not getattr(lead, field):
+            setattr(lead, field, value[:256])
+            dirty.append(field)
+    if len(dirty) == 1:
+        return False
+    if not lead.contact_source:
+        lead.contact_source = f"llm:{log.get('adapter', 'anthropic')}"
+        dirty.append("contact_source")
+    lead.save(update_fields=list(dict.fromkeys(dirty)))
+    return True
 
 
 def handle(task: Task) -> None:
@@ -64,6 +95,10 @@ def handle(task: Task) -> None:
 
     enriched = 0
     for lead in batch:
+        if lead.enrichment_log:
+            enriched += _recover_from_log(lead)
+            continue
+
         try:
             payload = adapter.enrich_contact(lead)
         except Exception as exc:  # noqa: BLE001
@@ -71,14 +106,13 @@ def handle(task: Task) -> None:
             continue
 
         if not payload:
-            # Mark as attempted so we don't hammer the same lead forever.
             lead.enrichment_log = {"status": "empty"}
             lead.save(update_fields=["enrichment_log", "updated_at"])
             continue
 
         dirty = ["enrichment_log", "updated_at"]
         for key, field in _FIELD_MAP.items():
-            value = (payload.get(key) or "").strip() if payload.get(key) else ""
+            value = (payload.get(key) or "").strip()
             if value and not getattr(lead, field):
                 setattr(lead, field, value[:256])
                 dirty.append(field)
@@ -91,7 +125,7 @@ def handle(task: Task) -> None:
         if not lead.contact_source:
             lead.contact_source = f"llm:{adapter.name}"
             dirty.append("contact_source")
-        lead.save(update_fields=list(dict.fromkeys(dirty)))
+        lead.save(update_fields=dirty)
         enriched += 1
 
     logger.info(

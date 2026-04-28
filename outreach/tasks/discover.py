@@ -24,19 +24,21 @@ def handle(task: Task) -> None:
 
     new_count = 0
     updated_count = 0
+    leads_to_update: list[Lead] = []
+    update_fields: set[str] = set()
+    now = timezone.now()
 
     for payload in fetch_source(source):
         ext_id = payload.pop("external_id")
-        defaults = {
-            **payload,
-            "source": source,
-            "campaign": task.campaign,
-            "stage": Lead.Stage.DISCOVERED,
-        }
-        lead, created = Lead.objects.update_or_create(
+        lead, created = Lead.objects.get_or_create(
             source=source,
             external_id=ext_id,
-            defaults=defaults,
+            defaults={
+                **payload,
+                "source": source,
+                "campaign": task.campaign,
+                "stage": Lead.Stage.DISCOVERED,
+            },
         )
         if created:
             new_count += 1
@@ -47,7 +49,17 @@ def handle(task: Task) -> None:
                 payload={"source": source.key},
             )
         else:
+            # Refresh data fields but never touch stage — leads in QUALIFIED
+            # or CONTACTED must not be reset to DISCOVERED on re-fetch.
+            for k, v in payload.items():
+                setattr(lead, k, v)
+            lead.updated_at = now
+            leads_to_update.append(lead)
+            update_fields.update(payload.keys())
             updated_count += 1
+
+    if leads_to_update:
+        Lead.objects.bulk_update(leads_to_update, list(update_fields) + ["updated_at"])
 
     source.last_run_at = timezone.now()
     source.last_error = ""

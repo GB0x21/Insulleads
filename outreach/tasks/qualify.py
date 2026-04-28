@@ -15,8 +15,10 @@ Decision ladder, in priority order:
 from __future__ import annotations
 
 import logging
+import os
 
 from django.conf import settings
+from django.utils import timezone
 
 from outreach.llm import get_adapter
 from outreach.ml import lgbm as lgbm_qualifier
@@ -30,6 +32,7 @@ QUALIFY_SCORE_THRESHOLD = 0.55  # posterior mean (0-1)
 LGBM_SCORE_THRESHOLD = 0.55     # LightGBM probability (0-1)
 LLM_SCORE_THRESHOLD = 0.55      # LLM cold-start judge (0-1)
 HEURISTIC_THRESHOLD = 50        # legacy 0-100 score
+QUALIFY_BATCH_SIZE = int(os.getenv("QUALIFY_BATCH_SIZE", "30"))
 
 
 def _pick_backend(campaign) -> str:
@@ -51,7 +54,7 @@ def handle(task: Task) -> None:
     batch = list(
         Lead.objects.filter(campaign=campaign, stage=Lead.Stage.DISCOVERED)
         .select_related("source")
-        .order_by("-created_at")[:200]
+        .order_by("-created_at")[:QUALIFY_BATCH_SIZE]
     )
     if not batch:
         task.reschedule(minutes=settings.OUTREACH["QUALIFY_INTERVAL_MIN"])
@@ -80,14 +83,13 @@ def handle(task: Task) -> None:
     adapter = get_adapter() if backend == "llm" else None
 
     promoted = 0
+    now = timezone.now()
     for lead, (mean, var) in zip(batch, results, strict=True):
         lead.qualification_score = mean
         lead.qualification_variance = var
         update_fields = [
             "qualification_score",
             "qualification_variance",
-            "stage",
-            "stage_changed_at",
             "updated_at",
         ]
 
@@ -129,6 +131,8 @@ def handle(task: Task) -> None:
 
         if passes:
             lead.stage = Lead.Stage.QUALIFIED
+            lead.stage_changed_at = now
+            update_fields += ["stage", "stage_changed_at"]
             promoted += 1
             ActionLog.objects.create(
                 lead=lead,
@@ -136,7 +140,7 @@ def handle(task: Task) -> None:
                 action=ActionLog.Action.QUALIFIED,
                 payload=decision_meta,
             )
-        lead.save(update_fields=list(dict.fromkeys(update_fields)))
+        lead.save(update_fields=update_fields)
 
     logger.info(
         "[qualify] campaign=%s backend=%s evaluated=%d promoted=%d",
