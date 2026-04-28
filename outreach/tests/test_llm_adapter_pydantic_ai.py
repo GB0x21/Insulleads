@@ -32,8 +32,12 @@ from outreach.llm.schemas import (
 
 
 @pytest.fixture
-def adapter() -> AnthropicAdapter:
-    return AnthropicAdapter({"ANTHROPIC_API_KEY": "sk-test-stub"})
+def adapter():
+    a = AnthropicAdapter({"ANTHROPIC_API_KEY": "sk-test-stub"})
+    try:
+        yield a
+    finally:
+        a.close()
 
 
 def _stub_lead(**overrides):

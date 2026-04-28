@@ -38,7 +38,6 @@ from .schemas import (
     CategoryFindings,
     FinalReview,
     OrchestratorOutput,
-    Redline,
 )
 
 logger = logging.getLogger("outreach.llm.contract_analyzer")

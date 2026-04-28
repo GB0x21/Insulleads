@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 from django.conf import settings
 
 from .adapter import LLMAdapter
+from .contract_analyzer import ContractAnalyzer
 from .prompts import (
     SYSTEM_EMAIL_WRITER,
     SYSTEM_ENRICHER,
@@ -64,16 +65,14 @@ class AnthropicAdapter(LLMAdapter):
 
     def __init__(self, cfg: dict[str, Any]) -> None:
         try:
-            import anthropic  # noqa: F401
+            from anthropic import Anthropic
         except ImportError as exc:  # pragma: no cover - surfaced by get_adapter
             raise RuntimeError(
                 "anthropic SDK not installed. Add `anthropic>=0.39.0` "
                 "to requirements/base.txt or `pip install anthropic`."
             ) from exc
         try:
-            from pydantic_ai.providers.anthropic import (  # noqa: F401
-                AnthropicProvider,
-            )
+            from pydantic_ai.providers.anthropic import AnthropicProvider
         except ImportError as exc:
             raise RuntimeError(
                 "pydantic-ai-slim[anthropic] not installed. Add "
@@ -86,9 +85,6 @@ class AnthropicAdapter(LLMAdapter):
                 "ANTHROPIC_API_KEY is not set. Export it in .env or switch "
                 "to LLM_ADAPTER=noop."
             )
-
-        from anthropic import Anthropic
-        from pydantic_ai.providers.anthropic import AnthropicProvider
 
         # Raw Anthropic client — kept as a public attribute so callers
         # that need the native SDK (web_search tool, etc.) can use it.
@@ -103,6 +99,23 @@ class AnthropicAdapter(LLMAdapter):
         # Per-(role, campaign) Agent cache — Agents are cheap to build
         # but caching avoids recomputing the system prompt on every call.
         self._agents: dict[str, Any] = {}
+
+    def close(self) -> None:
+        """Release the underlying HTTP connection pool. Optional in
+        long-running processes (the daemon) but useful in test fixtures
+        so sockets don't leak between cases."""
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "close"):
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
 
     # ─── Agent factory ────────────────────────────────────────────────
 
@@ -276,9 +289,6 @@ class AnthropicAdapter(LLMAdapter):
     ) -> dict[str, Any]:
         """Delegate to :class:`ContractAnalyzer` — uses the same provider
         so all 8 calls share one HTTP connection pool."""
-        # Lazy import — avoids a circular dep with this module.
-        from .contract_analyzer import ContractAnalyzer
-
         cfg = getattr(settings, "CONTRACTS", {}) or {}
         analyzer = ContractAnalyzer(
             provider=self._provider,

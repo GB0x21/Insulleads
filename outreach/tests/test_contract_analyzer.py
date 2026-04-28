@@ -8,7 +8,6 @@ canned outputs, so no network / no API key is needed.
 """
 from __future__ import annotations
 
-import pytest
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 
@@ -68,10 +67,6 @@ def _patch_agents(
                 TestModel(custom_output_args={"executive_summary": ""}),
                 output_type=OrchestratorOutput,
             )
-
-        @orch_agent.tool_plain  # noqa: unused, kept to make Agent runnable
-        def _noop() -> str:  # pragma: no cover
-            return ""
 
         # Wrap run_sync so we can count calls.
         _orig_run_sync_orch = orch_agent.run_sync
