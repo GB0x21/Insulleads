@@ -46,6 +46,51 @@ mix and match them in a single campaign.
 
 These run unmodified out of the box; just toggle `AGENT_*` env vars.
 
+**Five-tier contact enrichment on permit leads.** When the upstream
+agency's payload is light on contact info, `agents/permits_agent.py`
+fills the gaps progressively without overwriting earlier hits:
+
+1. **Local CSV** (`utils/contacts_loader.py`) — fast, free; phone/email
+   from the bundled `contacts/*.csv` indices.
+2. **CSLB** — by license number → company name → owner; recovers
+   license number, contractor city, and license status.
+3. **Hunter.io** — fills email when still missing
+   (set `HUNTER_API_KEY` in `.env`).
+4. **Apollo.io** — decision-maker email + name + LinkedIn
+   (set `APOLLO_API_KEY` in `.env`).
+5. **LLM `WebSearchTool`** — the pydantic-ai `enrich_contact` from
+   `outreach/llm/` runs as a last-resort tier for whatever's still
+   missing (website, license, decision-maker name). Fires only when
+   `LLM_ADAPTER=anthropic` and at least one of phone/email/website is
+   still blank. Disable with `PERMITS_LLM_ENRICH=false`.
+
+**Reachability sort.** A 0–4 `contact_quality_score`
+(`outreach/lead_quality.py`) — +1 for each of phone / email / website /
+linkedin — drives the send order in both paths. The legacy permits
+agent sorts its batch `(-quality, -value)` so you see the most-
+reachable big jobs first; the Django outreach loop sorts
+`(qualification, quality, lead_score)` so within each qualification
+tier the richer-contact lead wins. The score also appears in every
+Telegram message (`📊 Calidad de contacto: 3/4` legacy, `📊 reach 3/4`
+on the Django context block) so the operator sees at a glance how
+reachable a lead is.
+
+The `notify` Telegram card surfaces the new fields conditionally —
+`🌐 Website`, `💼 Cargo`, `🔗 LinkedIn`, plus the existing CSLB block —
+so a fully-enriched lead reads like:
+
+```
+👷 Contratista (GC): Acme Builders Inc
+🪪 Licencia CSLB: 1098765
+📞 Teléfono GC: (415) 555-1212  (via CSV (B_CONTACTS_GC.csv) + CSLB + Hunter.io)
+✉️  Email GC: ops@acme.example
+🌐 Website: https://acmebuilders.example
+💼 Cargo: Owner
+🔗 LinkedIn: https://linkedin.com/company/acme
+🏢 Ciudad GC (CSLB): Oakland
+✅ Estado Licencia: Active
+```
+
 **Quality filters on permit-style leads.** `agents/permits_agent.py`
 applies a value floor (`MIN_PERMIT_VALUE`, default $50k), a recency
 window (`PERMIT_MONTHS`, default 3) and a *blacklist* that drops

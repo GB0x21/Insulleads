@@ -39,6 +39,7 @@ def _stub_lead(**overrides):
         llm_qualification_reason="Active permit, big job, in SF.",
         llm_outreach_body="Hi — saw the 4211 26th project. Insulleads.",
         raw={"source_url": "https://data.sfgov.org/permits/abc123"},
+        enrichment_log={},
     )
     base.update(overrides)
     base["source"] = SimpleNamespace(kind="permits")

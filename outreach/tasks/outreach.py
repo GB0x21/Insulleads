@@ -13,6 +13,7 @@ import logging
 from django.conf import settings
 from django.utils import timezone
 
+from outreach.lead_quality import contact_quality_label, contact_quality_score
 from outreach.llm import get_adapter
 from outreach.models import ActionLog, Campaign, Lead, Task
 
@@ -134,6 +135,9 @@ def _format_context_block(lead: Lead) -> str:
             f" (σ²={lead.qualification_variance or 0:.2f})"
         )
     score_bits.append(f"🔥 {lead.lead_score}/100")
+    score_bits.append(
+        f"📊 reach {contact_quality_label(contact_quality_score(lead))}"
+    )
     score_bits.append(f"📡 {lead.source.kind}")
     lines.append(" · ".join(score_bits))
 
@@ -219,6 +223,17 @@ def handle(task: Task) -> None:
     if not batch:
         task.reschedule(minutes=settings.OUTREACH["OUTREACH_INTERVAL_MIN"])
         return
+
+    # Re-sort so high-reachability leads get the budget first. Tie-break
+    # falls back to the SQL order (qualification → lead_score), which is
+    # already stable.
+    batch.sort(
+        key=lambda l: (
+            -(l.qualification_score or 0.0),
+            -contact_quality_score(l),
+            -(l.lead_score or 0),
+        )
+    )
 
     inline_enrich = (
         settings.OUTREACH.get("ENRICH_INLINE_ON_OUTREACH", True)

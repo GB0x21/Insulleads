@@ -336,6 +336,86 @@ def test_outreach_inline_enriches_then_sends(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_outreach_orders_within_qualification_tier_by_contact_quality(
+    monkeypatch,
+):
+    """Two leads share the same qualification_score / lead_score; one
+    has phone+email+website+linkedin (4/4), the other has phone only
+    (1/4). The richer lead must be sent first."""
+    from outreach.models import Campaign, Lead, Source
+    from outreach.tasks import outreach as outreach_task
+
+    campaign = Campaign.objects.create(
+        name="t-order",
+        product_description="x",
+        target_market="y",
+        max_outreach_per_day=10,
+    )
+    source = Source.objects.create(
+        key="t-permits-order", kind="permits", campaign=campaign
+    )
+    poor = Lead.objects.create(
+        external_id="poor",
+        source=source,
+        campaign=campaign,
+        title="poor reach",
+        contact_phone="555-0001",
+        stage="QUALIFIED",
+        qualification_score=0.8,
+        lead_score=70,
+    )
+    rich = Lead.objects.create(
+        external_id="rich",
+        source=source,
+        campaign=campaign,
+        title="rich reach",
+        contact_phone="555-9999",
+        contact_email="ops@rich.example",
+        enrichment_log={
+            "status": "ok",
+            "website": "https://rich.example",
+            "linkedin": "https://linkedin.com/company/rich",
+        },
+        stage="QUALIFIED",
+        qualification_score=0.8,
+        lead_score=70,
+    )
+    from django.utils import timezone as tz
+    from outreach.models import Task
+
+    task = Task.objects.create(
+        type=Task.Type.OUTREACH, campaign=campaign, scheduled_at=tz.now()
+    )
+
+    sent_in_order: list[str] = []
+    monkeypatch.setattr(
+        "utils.telegram.send_message",
+        lambda text, **_: (sent_in_order.append(text), True)[1],
+    )
+    # Don't trigger inline enrichment — both leads already have contact.
+    monkeypatch.setattr(
+        outreach_task, "get_adapter", lambda: _StubAdapter({})
+    )
+    monkeypatch.setattr(
+        "outreach.tasks.enrich.get_adapter", lambda: _StubAdapter({})
+    )
+
+    outreach_task.handle(task)
+
+    assert len(sent_in_order) == 2
+    # The 4/4-reach lead must be the first message hitting Telegram.
+    assert "rich.example" in sent_in_order[0]
+    assert "555-0001" in sent_in_order[1]
+    # And the reach line is rendered in both context blocks.
+    assert "reach 4/4" in sent_in_order[0]
+    assert "reach 1/4" in sent_in_order[1]
+    # Sanity: both leads advanced to CONTACTED.
+    poor.refresh_from_db(); rich.refresh_from_db()
+    assert poor.stage == "CONTACTED"
+    assert rich.stage == "CONTACTED"
+
+
+@pytest.mark.django_db
 def test_outreach_sends_lead_that_already_has_contact(monkeypatch):
     """No inline enrichment when contact data is already present."""
     from outreach.tasks import outreach as outreach_task
