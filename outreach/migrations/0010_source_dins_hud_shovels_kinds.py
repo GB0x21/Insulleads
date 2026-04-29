@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("outreach", "0008_source_web_crawler_kind"),
+        ("outreach", "0009_alter_actionlog_action"),
     ]
 
     operations = [
