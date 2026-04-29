@@ -105,6 +105,12 @@ def _get_agent(source: Source):
         from agents.places_agent import PlacesAgent as Cls
     elif kind == "yelp":
         from agents.yelp_agent import YelpAgent as Cls
+    elif kind == "dins":
+        from agents.dins_agent import DINSAgent as Cls
+    elif kind == "hud_multifamily":
+        from agents.hud_agent import HUDMultifamilyAgent as Cls
+    elif kind == "shovels":
+        from agents.shovels_agent import ShovelsAgent as Cls
     elif kind == "thermal":
         from agents.thermal_agent import ThermalAgent as Cls
     elif kind == "email_prospect":

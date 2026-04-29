@@ -1046,16 +1046,29 @@ class PermitsAgent(BaseAgent):
 
         # ── Tier 2: CSLB — always tried so we don't lose license / city
         # / status even when CSV already gave us a phone. We only skip
-        # when there's literally nothing to look up.
+        # when there's literally nothing to look up. The bulk index
+        # (utils.cslb_bulk) is consulted first; the legacy scraper is
+        # the fallback for licenses missing from the dump.
         if (lic or contractor or owner) and not enrichment.get("cslb_status"):
-            time.sleep(0.3)
+            from utils import cslb_bulk
+
             cslb = {}
             if lic:
-                cslb = _cslb_lookup(license_number=lic)
+                cslb = cslb_bulk.lookup(license_number=lic)
             if not cslb.get("phone") and contractor:
-                cslb = _cslb_lookup(company_name=contractor)
+                cslb = cslb_bulk.lookup(company_name=contractor)
             if not cslb.get("phone") and owner and owner != contractor:
-                cslb = _cslb_lookup(company_name=owner)
+                cslb = cslb_bulk.lookup(company_name=owner)
+            # Fallback to the scraper only when the bulk index isn't
+            # loaded or doesn't have this contractor.
+            if not cslb:
+                time.sleep(0.3)
+                if lic:
+                    cslb = _cslb_lookup(license_number=lic)
+                if not cslb.get("phone") and contractor:
+                    cslb = _cslb_lookup(company_name=contractor)
+                if not cslb.get("phone") and owner and owner != contractor:
+                    cslb = _cslb_lookup(company_name=owner)
             if cslb:
                 if cslb.get("phone") and not enrichment.get("contact_phone"):
                     enrichment["contact_phone"] = cslb["phone"]

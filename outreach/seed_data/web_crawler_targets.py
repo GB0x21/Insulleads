@@ -142,6 +142,71 @@ WEB_CRAWLER_TARGETS: list[dict[str, Any]] = [
         },
     },
     {
+        # CalCERTS — California's HERS rater registry. HERS raters
+        # certify Title 24 compliance on every CA project. Two angles:
+        # (a) Raters are a *referral channel* — they don't install,
+        #     they recommend insulation subs.
+        # (b) Recently-rated projects with failures must redo
+        #     insulation to comply, which is a near-100%-conversion
+        #     lead.
+        "key": "calcerts_raters",
+        "interval_minutes": 1440,
+        "rationale": (
+            "CalCERTS HERS rater registry — referral channel + Title 24 "
+            "compliance failures."
+        ),
+        "config": {
+            "urls": ["https://www.calcerts.com/raters_directory.html"],
+            "schema": {
+                "name": "CalCERTSRaters",
+                # VERIFY — the CalCERTS directory ships as an HTML
+                # table with mostly server-rendered rows.
+                "baseSelector": "table.raters tr, .rater-card, tr",
+                "fields": [
+                    {"name": "business_name",
+                     "selector": "td.company, .name, td:first-child",
+                     "type": "text"},
+                    {"name": "phone", "selector": "td.phone, .tel",
+                     "type": "text"},
+                    {"name": "email", "selector": "a[href^='mailto:']",
+                     "type": "attribute", "attribute": "href"},
+                    {"name": "city", "selector": "td.city, .city",
+                     "type": "text"},
+                    {"name": "category", "selector": "td.cert, .category",
+                     "type": "text"},
+                ],
+            },
+            "city_default": "",
+            "http_only": True,
+        },
+    },
+    {
+        # CHEERS — alternative California HERS provider registry,
+        # parallel to CalCERTS. Same rationale (referrals + Title 24
+        # remediation leads).
+        "key": "cheers_raters",
+        "interval_minutes": 1440,
+        "rationale": (
+            "CHEERS HERS rater registry — second California HERS provider; "
+            "covers raters that don't appear on CalCERTS."
+        ),
+        "config": {
+            "urls": ["https://www.cheers.org/find-a-rater"],
+            "schema": {
+                "name": "CHEERSRaters",
+                # VERIFY
+                "baseSelector": ".rater, .listing, article",
+                "fields": [
+                    _NAME, _PHONE, _ADDR, _EMAIL, _WEB,
+                    {"name": "city", "selector": ".city",
+                     "type": "text"},
+                ],
+            },
+            "city_default": "",
+            "http_only": True,
+        },
+    },
+    {
         # Diamond Certified — Bay Area focused, quality-vetted local
         # service businesses. Filter by insulation-adjacent categories
         # (HVAC, weatherization, roofing, remodeling).

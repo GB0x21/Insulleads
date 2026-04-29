@@ -124,6 +124,9 @@ class Source(models.Model):
         ("scrapy", "Scrapy spider"),
         ("contract_bids", "Contract bids (multi-provider)"),
         ("web_crawler", "Web crawler (crawl4ai)"),
+        ("dins", "Cal Fire DINS (post-wildfire rebuilds)"),
+        ("hud_multifamily", "HUD multifamily / LIHTC"),
+        ("shovels", "Shovels.ai (national permits)"),
     ]
 
     key = models.CharField(max_length=64, unique=True)
