@@ -35,6 +35,10 @@ from utils.contacts_loader import load_all_contacts, lookup_contact
 from utils.lead_scoring import score_lead, format_score_line
 from utils.notifications import notify_multichannel
 from utils.inspection_schedule import get_next_visit_window
+from utils.inspection_filters import (
+    is_enforcement_inspection,
+    is_useful_inspection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,24 @@ SOURCE_TIMEOUT      = int(os.getenv("SOURCE_TIMEOUT", "45"))
 CONSTRUCTION_MONTHS = int(os.getenv("CONSTRUCTION_MONTHS", "1"))
 PARALLEL_INSPECT    = int(os.getenv("PARALLEL_INSPECT", "6"))
 BUILDZOOM_API_KEY   = os.getenv("BUILDZOOM_API_KEY", "")
+
+# Phase whitelist for an insulation subcontractor. By the time a
+# project hits "drywall" or "final", the wall is closed and the
+# insulation has already been installed by someone else — sending
+# those leads to the operator wastes their day. The "insulation"
+# phase is also off by default: by then the sub for the job is
+# already chosen. Operators who do competitive displacement work can
+# opt back into "insulation" via the env var.
+#
+# Default = foundation + framing + rough_mep — the three phases where
+# the wall is open or about to be opened, which is when an insulation
+# sub gets the job. Override with a comma-separated env var.
+_DEFAULT_PHASES = "foundation,framing,rough_mep"
+PHASES_INCLUDE = {
+    p.strip().lower()
+    for p in os.getenv("CONSTRUCTION_PHASES_INCLUDE", _DEFAULT_PHASES).split(",")
+    if p.strip()
+}
 
 
 def _cutoff_iso() -> str:
@@ -694,6 +716,13 @@ class ConstructionAgent(BaseAgent):
                         if not phase_info:
                             continue
 
+                        # Drop phases the operator's whitelist excludes
+                        # (default = pre-insulation phases only — by
+                        # drywall the wall is closed and insulation is
+                        # already in).
+                        if phase_info["phase"] not in PHASES_INCLUDE:
+                            continue
+
                         addr = get(raw, "address")
                         if fm.get("address2") and raw.get(fm.get("address2", "") or ""):
                             addr = f"{addr} {raw[fm['address2']]}".strip()
@@ -881,9 +910,14 @@ class ConstructionAgent(BaseAgent):
         if lead.get("source") == "BuildZoom":
             fields["📡 Fuente"] = "BuildZoom"
 
-        # Lookup inspection schedule for visit timing
+        # Lookup inspection schedule for visit timing. Drop the block
+        # when the helper returned a stale-or-unparseable date OR an
+        # enforcement-type visit (Code Investigation, complaint, …) —
+        # otherwise we surface 4/10/2018 "Code Investigation" rows as
+        # if they were live site-visit windows.
         visit = get_next_visit_window(lead)
-        if visit:
+        visit_is_useful = is_useful_inspection(visit)
+        if visit_is_useful:
             lead["_next_inspection"] = visit
             fields["🗓️ Proxima Inspeccion"] = visit.get("best_visit", "")
             if visit.get("type"):
@@ -891,7 +925,7 @@ class ConstructionAgent(BaseAgent):
 
         action = lead.get("action", "")
         cta = f"🚧 {action}"
-        if visit:
+        if visit_is_useful:
             cta = f"🚧 Visita la obra: {visit.get('best_visit', '')} — el GC estara en sitio"
 
         send_lead(

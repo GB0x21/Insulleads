@@ -115,6 +115,43 @@ so a fully-enriched lead reads like:
 ✅ Estado Licencia: Active
 ```
 
+**Construction phase whitelist.** `agents/construction_agent.py`
+classifies each inspection event into a phase
+(foundation → framing → rough_mep → insulation → drywall → final).
+For an insulation sub the only useful phases are the ones BEFORE the
+wall closes — by `drywall` the insulation is already in. The agent
+defaults to a whitelist of `foundation,framing,rough_mep` and drops
+everything else; override with:
+
+```bash
+CONSTRUCTION_PHASES_INCLUDE=framing,rough_mep,insulation
+```
+
+Set explicitly (e.g. add `insulation` if you do competitive
+displacement work). The `outreach/pipeline/sources.py` boundary
+mirror catches the same junk for any future agent that ships a
+`raw.phase` field.
+
+**Cleaning up legacy junk leads.** Older Lead rows ingested before
+the v9 quality / phase / recency filters existed still sit in
+`/admin/`. Apply today's filters retroactively:
+
+```bash
+# See what would be touched (no DB changes):
+python manage.py purge_junk_leads --dry-run
+
+# Soft-purge: flip stage→LOST + record the reason in
+# llm_qualification_reason. Default behaviour, fully reversible.
+python manage.py purge_junk_leads
+
+# Hard-delete the rows:
+python manage.py purge_junk_leads --hard --kinds permits,construction
+```
+
+CONTACTED / REPLIED / WON / LOST leads are never touched (they have
+ActionLog rows). The reason string is appended so an audit later can
+show why a lead was marked LOST.
+
 **Quality filters on permit-style leads.** `agents/permits_agent.py`
 applies a value floor (`MIN_PERMIT_VALUE`, default $50k), a recency
 window (`PERMIT_MONTHS`, default 3) and a *blacklist* that drops

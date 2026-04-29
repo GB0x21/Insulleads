@@ -166,26 +166,45 @@ def _passes_quality_filter(raw: dict, source: Source) -> bool:
     """Drop obviously-junk leads at the pipeline boundary so they never
     create `Lead` rows.
 
-    Permits-kind sources reuse the legacy agent's blacklist
-    (:func:`agents.permits_agent._is_quality_permit`) which catches the
-    Code-Investigation / "PLAN A LOT N" / planning-only patterns that
-    sneak past the keyword whitelist. Every other kind passes through.
+    Permits-kind sources reuse :func:`agents.permits_agent._is_quality_permit`.
+    Construction-kind sources drop leads whose `phase` is excluded by
+    the agent-level whitelist (default = pre-insulation phases only).
+    Every other kind passes through.
     """
-    if source.kind != "permits":
+    if source.kind == "permits":
+        try:
+            from agents.permits_agent import _is_quality_permit
+        except ImportError:
+            return True
+        ok, reason = _is_quality_permit(raw)
+        if not ok:
+            logger.info(
+                "[pipeline] dropping permits lead %s: %s",
+                raw.get("id") or raw.get("permit_number") or "?",
+                reason,
+            )
+        return ok
+
+    if source.kind == "construction":
+        # The construction agent already enforces the phase whitelist
+        # in `fetch_leads`. The duplicate check here is a safety net
+        # for leads imported by other paths (CSV import, future agents
+        # that reuse the same `phase` shape).
+        try:
+            from agents.construction_agent import PHASES_INCLUDE
+        except ImportError:
+            return True
+        phase = (raw.get("phase") or "").lower()
+        if phase and phase not in PHASES_INCLUDE:
+            logger.info(
+                "[pipeline] dropping construction lead %s: phase=%s "
+                "(not in whitelist)",
+                raw.get("id") or "?", phase,
+            )
+            return False
         return True
-    try:
-        from agents.permits_agent import _is_quality_permit
-    except ImportError:
-        return True
-    ok, reason = _is_quality_permit(raw)
-    if not ok:
-        logger.info(
-            "[pipeline] dropping %s lead %s: %s",
-            source.kind,
-            raw.get("id") or raw.get("permit_number") or "?",
-            reason,
-        )
-    return ok
+
+    return True
 
 
 # ─── Public API ─────────────────────────────────────────────────────
