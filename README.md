@@ -451,6 +451,48 @@ python manage.py test_web_crawler \
 
 Once happy, flip `enabled=True` from the Django admin or shell.
 
+#### Activating a seeded web_crawler target end-to-end
+
+The 7 targets seeded by `setup_crm` ship disabled with best-effort
+schemas. The four-step activation flow:
+
+```bash
+# 1. Inspect — fetches the page and prints the markdown excerpt + the
+#    25 most-frequent CSS classes so you can pick the real baseSelector.
+python manage.py test_web_crawler --inspect \
+    --url https://www.calcerts.com/raters_directory.html
+
+# 2. Write a verified schema to a JSON file (use the classes you saw above)
+cat > schemas/calcerts.json <<'JSON'
+{
+  "name": "CalCERTSRaters",
+  "baseSelector": "tr.rater-row",
+  "fields": [
+    {"name": "business_name", "selector": "td.company", "type": "text"},
+    {"name": "phone",         "selector": "td.phone",   "type": "text"},
+    {"name": "email", "selector": "a[href^='mailto:']",
+     "type": "attribute", "attribute": "href"},
+    {"name": "city",          "selector": "td.city",    "type": "text"}
+  ]
+}
+JSON
+
+# 3. Smoke-test the schema against the live URL — make sure the first
+#    5 leads look right.
+python manage.py test_web_crawler \
+    --url https://www.calcerts.com/raters_directory.html \
+    --schema-file schemas/calcerts.json --limit 5
+
+# 4. Activate — atomically replaces the seed schema and flips enabled=True.
+python manage.py enable_web_crawler \
+    --key calcerts_raters \
+    --schema-file schemas/calcerts.json
+
+# Inspect / disable later:
+python manage.py enable_web_crawler --key calcerts_raters --show
+python manage.py enable_web_crawler --key calcerts_raters --disable
+```
+
 ### Bayesian qualifier
 
 `outreach/ml/qualifier.py` is a 1:1 adaptation of OpenOutreach's
