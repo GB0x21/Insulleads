@@ -8,8 +8,12 @@ canned outputs, so no network / no API key is needed.
 """
 from __future__ import annotations
 
-from pydantic_ai import Agent
-from pydantic_ai.models.test import TestModel
+import pytest
+
+pytest.importorskip("pydantic_ai", reason="pydantic-ai-slim not installed")
+
+from pydantic_ai import Agent  # noqa: E402
+from pydantic_ai.models.test import TestModel  # noqa: E402
 
 from outreach.llm.contract_analyzer import ContractAnalyzer
 from outreach.llm.schemas import (

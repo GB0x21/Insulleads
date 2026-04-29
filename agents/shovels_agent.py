@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -89,7 +89,7 @@ def _headers() -> dict[str, str]:
 def _fetch_state_permits(state: str) -> list[dict]:
     """Search Shovels.ai for recent permits in a single state."""
     issued_after = (
-        datetime.utcnow() - timedelta(days=SHOVELS_DAYS_BACK)
+        datetime.now(timezone.utc) - timedelta(days=SHOVELS_DAYS_BACK)
     ).strftime("%Y-%m-%d")
     params = {
         "state": state,

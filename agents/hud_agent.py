@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -108,7 +108,7 @@ def _normalize_lihtc(attrs: dict[str, Any], geom: dict[str, Any]) -> dict | None
                      "Project_Sponsor")
     object_id = attrs.get("OBJECTID") or attrs.get("ObjectID") or attrs.get("FID")
 
-    age = (datetime.utcnow().year - placed) if placed else 0
+    age = (datetime.now(timezone.utc).year - placed) if placed else 0
     in_rehab_window = placed and age >= HUD_REHAB_WINDOW
 
     return {

@@ -2,11 +2,41 @@
 `python manage.py setup_crm` — bootstrap a default SiteConfig + Campaign
 so `make run` works on a fresh checkout.
 """
+import os
+
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from outreach.models import Campaign, SiteConfig, Source
 from outreach.seed_data.web_crawler_targets import iter_targets as _web_crawler_targets
+
+# Default polling intervals (minutes) per source kind.  Slow-moving
+# public datasets run once-daily; high-churn permit feeds run hourly.
+_DEFAULT_INTERVALS: dict[str, int] = {
+    "permits":         60,
+    "solar":           60,
+    "construction":    60,
+    "deconstruction":  120,
+    "rodents":         120,
+    "realestate":      120,
+    "flood":           30,
+    "energy":          360,
+    "places":          1440,
+    "yelp":            1440,
+    "thermal":         1440,
+    "dins":            1440,  # Cal Fire DINS — wildfire data is stable; daily is plenty
+    "hud_multifamily": 1440,  # HUD/LIHTC — rehab windows span years; daily refresh
+    "shovels":         1440,  # Shovels.ai — broad permit sweep; daily avoids quota burn
+}
+
+
+def _interval(kind: str) -> int:
+    """Return the polling interval for *kind*, honouring INTERVAL_<KIND> env overrides."""
+    env_key = f"INTERVAL_{kind.upper()}"
+    raw = os.getenv(env_key, "")
+    if raw.strip().isdigit():
+        return int(raw.strip())
+    return _DEFAULT_INTERVALS.get(kind, 60)
 
 
 class Command(BaseCommand):
@@ -40,7 +70,7 @@ class Command(BaseCommand):
                 defaults={
                     "kind": kind,
                     "campaign": campaign,
-                    "interval_minutes": 60,
+                    "interval_minutes": _interval(kind),
                 },
             )
             self.stdout.write(
