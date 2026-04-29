@@ -64,6 +64,17 @@ fills the gaps progressively without overwriting earlier hits:
    `LLM_ADAPTER=anthropic` and at least one of phone/email/website is
    still blank. Disable with `PERMITS_LLM_ENRICH=false`.
 
+**Reachability sort.** A 0–4 `contact_quality_score`
+(`outreach/lead_quality.py`) — +1 for each of phone / email / website /
+linkedin — drives the send order in both paths. The legacy permits
+agent sorts its batch `(-quality, -value)` so you see the most-
+reachable big jobs first; the Django outreach loop sorts
+`(qualification, quality, lead_score)` so within each qualification
+tier the richer-contact lead wins. The score also appears in every
+Telegram message (`📊 Calidad de contacto: 3/4` legacy, `📊 reach 3/4`
+on the Django context block) so the operator sees at a glance how
+reachable a lead is.
+
 The `notify` Telegram card surfaces the new fields conditionally —
 `🌐 Website`, `💼 Cargo`, `🔗 LinkedIn`, plus the existing CSLB block —
 so a fully-enriched lead reads like:

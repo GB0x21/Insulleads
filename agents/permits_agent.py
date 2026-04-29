@@ -37,6 +37,7 @@ from agents.base import BaseAgent
 from utils.telegram import send_lead
 from utils.contacts_loader import load_all_contacts, lookup_contact
 from utils.inspection_schedule import get_next_visit_window, format_visit_info
+from outreach.lead_quality import contact_quality_label, contact_quality_score
 
 logger = logging.getLogger(__name__)
 
@@ -1186,6 +1187,13 @@ class PermitsAgent(BaseAgent):
                     f"{rejected_quality} non-construction)"
                 )
 
+        # Send the most-reachable leads first. Within equal contact
+        # quality, fall back to project value so big jobs still bubble
+        # up. Operator's Telegram limit / digest mode then trims.
+        all_leads.sort(key=lambda l: (
+            -contact_quality_score(l),
+            -float(l.get("value_float") or 0),
+        ))
         return all_leads
 
     def notify(self, lead: dict):
@@ -1216,6 +1224,11 @@ class PermitsAgent(BaseAgent):
             fields["💼 Cargo"] = lead["position"]
         if lead.get("linkedin"):
             fields["🔗 LinkedIn"] = lead["linkedin"]
+        # Reachability score — how many independent channels we have
+        # to reach this GC (phone / email / website / linkedin).
+        fields["📊 Calidad de contacto"] = contact_quality_label(
+            contact_quality_score(lead)
+        )
         if lead.get("contact_source") == "CSLB":
             if lead.get("cslb_city"):
                 fields["🏢 Ciudad GC (CSLB)"] = lead["cslb_city"]
