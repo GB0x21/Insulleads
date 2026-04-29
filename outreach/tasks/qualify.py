@@ -51,10 +51,16 @@ def _pick_backend(campaign) -> str:
 def handle(task: Task) -> None:
     campaign = task.campaign
 
+    # Unscored leads first (null score = never evaluated or reset after a bug),
+    # then recently created. This prevents the task from looping forever on
+    # the same low-score leads while higher-value sources wait indefinitely.
+    from django.db.models import Value
+    from django.db.models.functions import Coalesce
     batch = list(
         Lead.objects.filter(campaign=campaign, stage=Lead.Stage.DISCOVERED)
         .select_related("source")
-        .order_by("-created_at")[:QUALIFY_BATCH_SIZE]
+        .annotate(has_score=Coalesce("qualification_score", Value(-1.0)))
+        .order_by("has_score", "-created_at")[:QUALIFY_BATCH_SIZE]
     )
     if not batch:
         task.reschedule(minutes=settings.OUTREACH["QUALIFY_INTERVAL_MIN"])
