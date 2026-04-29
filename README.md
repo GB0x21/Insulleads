@@ -46,6 +46,30 @@ mix and match them in a single campaign.
 
 These run unmodified out of the box; just toggle `AGENT_*` env vars.
 
+**California-specific high-value sources** *(opt-in via env)*:
+
+| Agent | Env var | What it gives | Why it matters |
+|---|---|---|---|
+| `agents/dins_agent.py` | `AGENT_DINS=true` | Cal Fire DINS — every structure damaged in CA wildfires (Park, Borel, Camp, Glass, Dixie, etc.) | Every Destroyed/Major-Damage structure is being rebuilt. Title 24 obliges new insulation on every rebuild. The DINS dataset *is* the entire post-fire CA rebuild market. |
+| `agents/hud_agent.py` | `AGENT_HUD_MULTIFAMILY=true` | HUD LIHTC + assisted multifamily | One conversation = a 50-500-unit job; LIHTC properties placed in service ≥20 yrs ago are flagged as rehab candidates. ~10× ROI per outreach hour vs SFR. |
+| `agents/shovels_agent.py` | `AGENT_SHOVELS=true` + `SHOVELS_API_KEY` | National permits aggregator (Shovels.ai) | Extends coverage from Bay Area only to every CA jurisdiction Shovels indexes (LA, San Diego, Sacramento, OC, …) plus the rest of the country. Free tier from [shovels.ai](https://shovels.ai/). |
+
+**Statewide auto-discovery**:
+
+```bash
+# Find every CA permit dataset on a Socrata portal that permits_agent
+# doesn't already know about — outputs sample rows so you can map
+# column names before adding it to permits_agent._build_sources.
+python manage.py discover_socrata_permits --state CA --new-only --sample
+```
+
+**CSLB bulk index** *(replaces the slow ASP.NET scraper)*: request the
+free CSLB extract at
+[cslb.ca.gov/About_us/Library/Data_Requests](https://www.cslb.ca.gov/About_us/Library/Data_Requests/),
+drop the CSV at `data/cslb_bulk.csv` (or set `CSLB_BULK_PATH`), and the
+permit enrichment cascade picks it up automatically — lookups go from
+~2s/contractor to <1ms. Inspect with `python manage.py cslb_index --info`.
+
 **Five-tier contact enrichment on permit leads.** When the upstream
 agency's payload is light on contact info, `agents/permits_agent.py`
 fills the gaps progressively without overwriting earlier hits:
@@ -403,6 +427,8 @@ Bay Area lead-gen targets as **disabled** Source rows — see
 | `nari_sf_bay`                    | NARI SF Bay chapter members — remodelers / GCs that spec insulation    |
 | `build_it_green`                 | GreenPoint Rated professionals — green-building contractors and raters |
 | `energy_upgrade_ca`              | Energy Upgrade California participating contractors (statewide, filterable) |
+| `calcerts_raters`                | CalCERTS HERS rater registry — referral channel + Title 24 remediation |
+| `cheers_raters`                  | CHEERS HERS rater registry — second CA HERS provider                    |
 | `diamond_certified_insulation`   | Diamond Certified Bay Area insulation / HVAC / weatherization vendors  |
 
 Each schema is best-effort and marked `# VERIFY` — site markup changes

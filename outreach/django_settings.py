@@ -106,6 +106,15 @@ OUTREACH = {
             "construction", "deconstruction", "realestate",
             "energy", "places", "yelp",
         ] if os.getenv(f"AGENT_{key.upper()}", "true").lower() not in ("false", "0", "no")
+    ] + [
+        # New sources: opt-in by default. Flip the env var to enable.
+        # All three follow the same pattern (env=true → setup_crm seeds
+        # an enabled Source row).
+        key for key in [
+            "dins",            # Cal Fire post-wildfire rebuilds
+            "hud_multifamily", # HUD / LIHTC large-ticket leads
+            "shovels",         # National permits aggregator (needs SHOVELS_API_KEY)
+        ] if os.getenv(f"AGENT_{key.upper()}", "false").lower() in ("true", "1", "yes")
     ],
 }
 
