@@ -65,7 +65,7 @@ class AnthropicAdapter(LLMAdapter):
 
     def __init__(self, cfg: dict[str, Any]) -> None:
         try:
-            from anthropic import Anthropic
+            from anthropic import Anthropic, AsyncAnthropic
         except ImportError as exc:  # pragma: no cover - surfaced by get_adapter
             raise RuntimeError(
                 "anthropic SDK not installed. Add `anthropic>=0.39.0` "
@@ -86,11 +86,16 @@ class AnthropicAdapter(LLMAdapter):
                 "to LLM_ADAPTER=noop."
             )
 
-        # Raw Anthropic client — kept as a public attribute so callers
-        # that need the native SDK (web_search tool, etc.) can use it.
+        # Sync client — kept for callers that use the native SDK directly
+        # (web_search tool, contract analyzer).
         self._client = Anthropic(api_key=api_key)
-        # pydantic-ai provider sharing the same HTTP client.
-        self._provider = AnthropicProvider(anthropic_client=self._client)
+        # pydantic-ai requires an AsyncAnthropic client internally because
+        # all its model calls go through async coroutines. Passing the sync
+        # Anthropic client caused "BetaMessage can't be used in 'await'
+        # expression" when anthropic_cache_instructions=True triggered the
+        # beta endpoint path.
+        self._async_client = AsyncAnthropic(api_key=api_key)
+        self._provider = AnthropicProvider(anthropic_client=self._async_client)
 
         self._model_default_id = cfg.get("MODEL") or "claude-opus-4-6"
         self._model_enrich_id = cfg.get("ENRICH_MODEL") or self._model_default_id
@@ -104,12 +109,13 @@ class AnthropicAdapter(LLMAdapter):
         """Release the underlying HTTP connection pool. Optional in
         long-running processes (the daemon) but useful in test fixtures
         so sockets don't leak between cases."""
-        client = getattr(self, "_client", None)
-        if client is not None and hasattr(client, "close"):
-            try:
-                client.close()
-            except Exception:  # noqa: BLE001
-                pass
+        for attr in ("_client", "_async_client"):
+            client = getattr(self, attr, None)
+            if client is not None and hasattr(client, "close"):
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def __enter__(self):
         return self
