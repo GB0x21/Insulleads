@@ -45,6 +45,60 @@ MIN_PERMIT_VALUE = float(os.getenv("MIN_PERMIT_VALUE", "50000"))
 PERMIT_MONTHS    = int(os.getenv("PERMIT_MONTHS", "3"))
 SOURCE_TIMEOUT   = int(os.getenv("SOURCE_TIMEOUT", "45"))
 
+# Tier-5 (LLM web_search) is the most expensive enrichment step in the
+# cascade — one Anthropic call per uncached contractor. Off-by-default
+# would change behaviour silently; on-by-default but easy to disable.
+_LLM_ENRICH_ENABLED = os.getenv(
+    "PERMITS_LLM_ENRICH", "true"
+).lower() in ("1", "true", "yes")
+
+
+def _merge_source(current: str | None, new: str) -> str:
+    """Append a backend tag to the human-readable contact_source string
+    without duplicating it (e.g. "CSV (...) + CSLB + Hunter.io")."""
+    if not current:
+        return new
+    if not new or new in current:
+        return current
+    return f"{current} + {new}"
+
+
+class _LegacyLeadStub:
+    """Duck-typed Lead-like object so the pydantic-ai LLM enricher
+    (which expects a Django ``Lead``) can be invoked from the legacy
+    dict-based agent path. Exposes only the attributes
+    :func:`outreach.llm.prompts.lead_payload` and the adapter's
+    ``logger.warning(... lead.pk ...)`` actually read."""
+
+    __slots__ = (
+        "pk", "title", "address", "city", "project_type", "project_value",
+        "description", "contact_company", "contact_name", "contact_phone",
+        "contact_email", "lead_score", "source",
+    )
+
+    def __init__(self, lead: dict, search_name: str, enrichment: dict):
+        self.pk = lead.get("id") or 0
+        addr_bits = [b for b in (lead.get("address"), lead.get("city")) if b]
+        self.title = (
+            lead.get("description") or lead.get("permit_type") or "permit"
+        )
+        self.address = lead.get("address", "") or ""
+        self.city = lead.get("city", "") or ""
+        self.project_type = lead.get("permit_type", "") or ""
+        try:
+            self.project_value = float(lead.get("value_float", 0) or 0)
+        except (ValueError, TypeError):
+            self.project_value = 0.0
+        self.description = " · ".join(addr_bits) + (
+            f" — {lead.get('description')}" if lead.get("description") else ""
+        )
+        self.contact_company = search_name
+        self.contact_name = enrichment.get("contact_name", "")
+        self.contact_phone = enrichment.get("contact_phone", "")
+        self.contact_email = enrichment.get("contact_email", "")
+        self.lead_score = 0
+        self.source = type("S", (), {"kind": "permits"})()
+
 
 def _cutoff_iso() -> str:
     return (datetime.utcnow() - timedelta(days=30 * PERMIT_MONTHS)).strftime("%Y-%m-%dT00:00:00")
@@ -940,18 +994,35 @@ class PermitsAgent(BaseAgent):
         self._cslb_cache = {}
 
     def _enrich_gc(self, lead: dict) -> dict:
-        """
-        Enriquece datos de contacto del GC:
-          1. CSV local por nombre (fuzzy match)
-          2. CSLB por número de licencia
-          3. CSLB por nombre de empresa
-          4. Si contractor vacío pero hay owner → intenta con owner
-        """
+        """Five-tier fill-missing enrichment cascade for the GC contact.
+
+        Each tier is consulted in order and *adds the fields it can find
+        without overwriting fields already filled by an earlier tier*.
+        Pre-v9 the cascade short-circuited at the first phone/email hit,
+        which caused the CSLB / external-API / LLM tiers to be skipped
+        the moment the local CSV produced a phone — losing license
+        numbers, emails and websites along the way.
+
+        Tiers:
+          1. Local CSV (``utils.contacts_loader.lookup_contact``) — fast,
+             free; gives phone / email / canonical name.
+          2. CSLB (``_cslb_lookup``) — by license, then company, then
+             owner; recovers license number, contractor city, and
+             license status, plus a phone fallback.
+          3. Hunter.io (``utils.contact_enrichment``) — best-effort
+             email finder; needs ``HUNTER_API_KEY``.
+          4. Apollo.io (same module) — decision-maker email + name;
+             needs ``APOLLO_API_KEY``.
+          5. LLM web_search (``outreach.llm.get_adapter().enrich_contact``)
+             — last-resort fallback for whatever's still missing
+             (website, decision-maker name, license number). Only fires
+             when ``adapter.name != "noop"`` and at least one of phone /
+             email / website is still missing. Disable with
+             ``PERMITS_LLM_ENRICH=false``."""
         contractor = lead.get("contractor", "").strip()
         lic        = lead.get("lic_number", "").strip()
         owner      = lead.get("owner", "").strip()
 
-        # Para SF, si no hay GC pero hay owner, usamos owner como contacto
         search_name = contractor or owner
         cache_key   = lic or search_name
         if not cache_key:
@@ -959,22 +1030,23 @@ class PermitsAgent(BaseAgent):
         if cache_key in self._cslb_cache:
             return self._cslb_cache[cache_key]
 
-        enrichment = {}
+        enrichment: dict = {}
 
-        # ── Paso 1: CSV local ─────────────────────────────────────
+        # ── Tier 1: CSV local ────────────────────────────────────────
         if search_name:
             match = lookup_contact(search_name, self._contacts)
             if match:
-                enrichment = {
-                    "contact_phone":  match.get("phone", ""),
-                    "contact_email":  match.get("email", ""),
-                    "contact_source": f"CSV ({match['source']})",
-                    "contact_name":   match["raw_name"],
-                }
+                if match.get("phone"):
+                    enrichment["contact_phone"] = match["phone"]
+                if match.get("email"):
+                    enrichment["contact_email"] = match["email"]
+                enrichment["contact_name"]   = match["raw_name"]
+                enrichment["contact_source"] = f"CSV ({match['source']})"
 
-        # ── Paso 2: CSLB si no hay teléfono/email del CSV ─────────
-        has_contact = enrichment.get("contact_phone") or enrichment.get("contact_email")
-        if not has_contact:
+        # ── Tier 2: CSLB — always tried so we don't lose license / city
+        # / status even when CSV already gave us a phone. We only skip
+        # when there's literally nothing to look up.
+        if (lic or contractor or owner) and not enrichment.get("cslb_status"):
             time.sleep(0.3)
             cslb = {}
             if lic:
@@ -983,16 +1055,85 @@ class PermitsAgent(BaseAgent):
                 cslb = _cslb_lookup(company_name=contractor)
             if not cslb.get("phone") and owner and owner != contractor:
                 cslb = _cslb_lookup(company_name=owner)
-
             if cslb:
-                enrichment = {
-                    "contact_phone":  cslb.get("phone", ""),
-                    "contact_email":  "",
-                    "contact_source": "CSLB",
-                    "contact_name":   cslb.get("cslb_name", search_name),
-                    "cslb_city":      cslb.get("cslb_city", ""),
-                    "cslb_status":    cslb.get("cslb_status", ""),
-                }
+                if cslb.get("phone") and not enrichment.get("contact_phone"):
+                    enrichment["contact_phone"] = cslb["phone"]
+                if not enrichment.get("contact_name"):
+                    enrichment["contact_name"] = cslb.get("cslb_name", search_name)
+                enrichment["cslb_city"]   = cslb.get("cslb_city", "")
+                enrichment["cslb_status"] = cslb.get("cslb_status", "")
+                enrichment["contact_source"] = _merge_source(
+                    enrichment.get("contact_source"), "CSLB"
+                )
+
+        # ── Tier 3+4: Hunter.io / Apollo.io ──────────────────────────
+        # Only when email is still missing AND the relevant API key is
+        # configured (the helper short-circuits internally if not).
+        if not enrichment.get("contact_email") and search_name:
+            try:
+                from utils.contact_enrichment import enrich_contact as ext_enrich
+
+                ext = ext_enrich(
+                    company_name=search_name, person_name=contractor
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[Hunter/Apollo] error: {exc}")
+                ext = {}
+            if ext:
+                if ext.get("email") and not enrichment.get("contact_email"):
+                    enrichment["contact_email"] = ext["email"]
+                if ext.get("phone") and not enrichment.get("contact_phone"):
+                    enrichment["contact_phone"] = ext["phone"]
+                if ext.get("position"):
+                    enrichment["position"] = ext["position"]
+                if ext.get("linkedin_url"):
+                    enrichment["linkedin"] = ext["linkedin_url"]
+                if ext.get("source"):
+                    enrichment["contact_source"] = _merge_source(
+                        enrichment.get("contact_source"), ext["source"]
+                    )
+
+        # ── Tier 5: LLM web_search (outreach/llm/) ────────────────────
+        # Skipped when the adapter is noop (no API key), when the
+        # operator opted out via PERMITS_LLM_ENRICH=false, or when the
+        # critical fields are already filled.
+        if _LLM_ENRICH_ENABLED and search_name:
+            still_missing = (
+                not enrichment.get("contact_email")
+                or not enrichment.get("contact_phone")
+                or not enrichment.get("website")
+            )
+            if still_missing:
+                try:
+                    from outreach.llm import get_adapter
+
+                    adapter = get_adapter()
+                    if adapter.name != "noop":
+                        stub = _LegacyLeadStub(lead, search_name, enrichment)
+                        payload = adapter.enrich_contact(stub) or {}
+                        for key in (
+                            "contact_phone",
+                            "contact_email",
+                            "website",
+                            "contact_name",
+                            "cslb_license",
+                            "linkedin",
+                        ):
+                            val = (payload.get(key) or "").strip()
+                            if val and not enrichment.get(key):
+                                enrichment[key] = val
+                        # If the LLM filled the license number AND the
+                        # original lead row didn't have one, surface it
+                        # so the notify card shows it.
+                        if payload.get("cslb_license") and not lic:
+                            enrichment["lic_number"] = payload["cslb_license"]
+                        if payload:
+                            enrichment["contact_source"] = _merge_source(
+                                enrichment.get("contact_source"),
+                                f"llm:{adapter.name}",
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"[LLM enricher] error: {exc}")
 
         self._cslb_cache[cache_key] = enrichment
         return enrichment
@@ -1065,6 +1206,16 @@ class PermitsAgent(BaseAgent):
             "✉️  Email GC":        email,
             "👤 Propietario":      lead.get("owner") or "—",
         }
+        # Surface anything filled by the new tier-3/4/5 enrichment so
+        # the operator sees the new info on Telegram. Every line is
+        # conditional so leads that *do* still come back partial don't
+        # show "—" rows.
+        if lead.get("website"):
+            fields["🌐 Website"] = lead["website"]
+        if lead.get("position"):
+            fields["💼 Cargo"] = lead["position"]
+        if lead.get("linkedin"):
+            fields["🔗 LinkedIn"] = lead["linkedin"]
         if lead.get("contact_source") == "CSLB":
             if lead.get("cslb_city"):
                 fields["🏢 Ciudad GC (CSLB)"] = lead["cslb_city"]
