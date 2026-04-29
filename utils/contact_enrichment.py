@@ -47,7 +47,29 @@ def enrich_contact(company_name: str = "", domain: str = "",
     if not result.get("email") and APOLLO_API_KEY:
         apollo = _apollo_lookup(company_name, person_name, domain)
         if apollo:
+            # Merge additional_contacts from both sources
+            hunter_additional = result.pop("additional_contacts", [])
+            apollo_additional = apollo.pop("additional_contacts", [])
             result = {**result, **apollo}
+            # Combine additional contacts, dedupe by email, max 4
+            seen = {(result.get("email") or "").lower()}
+            merged_additional = []
+            for c in hunter_additional + apollo_additional:
+                ce = (c.get("email") or "").lower()
+                if len(merged_additional) >= 4:
+                    break
+                if ce and ce not in seen:
+                    merged_additional.append(c)
+                    seen.add(ce)
+                elif not ce and len(merged_additional) < 4:
+                    merged_additional.append(c)
+            if merged_additional:
+                result["additional_contacts"] = merged_additional
+    elif result.get("additional_contacts"):
+        # Hunter only, keep its additional contacts but cap at 4
+        extras = result.get("additional_contacts", [])
+        if len(extras) > 4:
+            result["additional_contacts"] = extras[:4]
 
     _enrichment_cache[cache_key] = result
     return result
@@ -59,56 +81,50 @@ def _hunter_lookup(company_name: str, domain: str = "") -> dict:
     Free tier: 25 búsquedas/mes (verificaciones) + 50 búsquedas.
     """
     try:
+        params = {"api_key": HUNTER_API_KEY, "limit": 10}
         if domain:
-            # Domain Search — encuentra emails del dominio
-            resp = requests.get(
-                "https://api.hunter.io/v2/domain-search",
-                params={
-                    "domain": domain,
-                    "api_key": HUNTER_API_KEY,
-                    "limit": 3,
-                },
-                timeout=10,
-            )
+            params["domain"] = domain
         else:
-            # Company Search — busca por nombre de empresa
-            resp = requests.get(
-                "https://api.hunter.io/v2/domain-search",
-                params={
-                    "company": company_name,
-                    "api_key": HUNTER_API_KEY,
-                    "limit": 3,
-                },
-                timeout=10,
-            )
-
+            params["company"] = company_name
+        resp = requests.get("https://api.hunter.io/v2/domain-search", params=params, timeout=10)
         if resp.status_code != 200:
             return {}
-
         data = resp.json().get("data", {})
         emails = data.get("emails", [])
-
         if not emails:
             return {}
-
-        # Priorizar decisores: owner, manager, director
         priority_titles = ["owner", "manager", "director", "president", "ceo", "founder"]
-        best = emails[0]
-        for e in emails:
+        # Sort: decision-makers first, then by confidence desc
+        def _priority(e):
             pos = (e.get("position") or "").lower()
-            if any(t in pos for t in priority_titles):
-                best = e
-                break
-
-        return {
-            "email":       best.get("value", ""),
-            "first_name":  best.get("first_name", ""),
-            "last_name":   best.get("last_name", ""),
-            "position":    best.get("position", ""),
-            "phone":       best.get("phone_number", ""),
-            "confidence":  best.get("confidence", 0),
-            "source":      "Hunter.io",
+            return (0 if any(t in pos for t in priority_titles) else 1, -(e.get("confidence") or 0))
+        emails.sort(key=_priority)
+        primary = emails[0]
+        additional = []
+        seen_emails = {primary.get("value", "").lower()}
+        for e in emails[1:]:
+            ev = (e.get("value") or "").lower()
+            if ev and ev not in seen_emails and len(additional) < 4:
+                additional.append({
+                    "email": e.get("value", ""),
+                    "name": f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
+                    "position": e.get("position", ""),
+                    "phone": e.get("phone_number", ""),
+                    "source": "Hunter.io",
+                })
+                seen_emails.add(ev)
+        result = {
+            "email": primary.get("value", ""),
+            "first_name": primary.get("first_name", ""),
+            "last_name": primary.get("last_name", ""),
+            "position": primary.get("position", ""),
+            "phone": primary.get("phone_number", ""),
+            "confidence": primary.get("confidence", 0),
+            "source": "Hunter.io",
         }
+        if additional:
+            result["additional_contacts"] = additional
+        return result
     except Exception as e:
         logger.debug(f"[Hunter.io] Error: {e}")
         return {}
@@ -133,35 +149,49 @@ def _apollo_lookup(company_name: str = "", person_name: str = "",
                     "api_key": APOLLO_API_KEY,
                     "q_organization_name": company_name,
                     "page": 1,
-                    "per_page": 3,
-                    "person_titles": ["owner", "manager", "president", "director"],
+                    "per_page": 5,
+                    "person_titles": ["owner", "manager", "president", "director", "superintendent", "project manager", "estimator"],
                 },
                 timeout=10,
             )
-
             if resp.status_code != 200:
                 return {}
-
-            data = resp.json()
-            people = data.get("people", [])
-
+            people = resp.json().get("people", [])
             if not people:
                 return {}
-
             person = people[0]
             org = person.get("organization", {})
-
-            return {
-                "email":        person.get("email", ""),
-                "first_name":   person.get("first_name", ""),
-                "last_name":    person.get("last_name", ""),
-                "phone":        (person.get("phone_numbers") or [{}])[0].get("sanitized_number", "") if person.get("phone_numbers") else "",
-                "position":     person.get("title", ""),
+            additional = []
+            seen_emails = {(person.get("email") or "").lower()}
+            for p in people[1:]:
+                pe = (p.get("email") or "").lower()
+                if len(additional) >= 4:
+                    break
+                phone = ""
+                if p.get("phone_numbers"):
+                    phone = p["phone_numbers"][0].get("sanitized_number", "")
+                additional.append({
+                    "email": p.get("email", ""),
+                    "name": f"{p.get('first_name','')} {p.get('last_name','')}".strip(),
+                    "position": p.get("title", ""),
+                    "phone": phone,
+                    "linkedin_url": p.get("linkedin_url", ""),
+                    "source": "Apollo.io",
+                })
+            result = {
+                "email": person.get("email", ""),
+                "first_name": person.get("first_name", ""),
+                "last_name": person.get("last_name", ""),
+                "phone": (person.get("phone_numbers") or [{}])[0].get("sanitized_number", "") if person.get("phone_numbers") else "",
+                "position": person.get("title", ""),
                 "linkedin_url": person.get("linkedin_url", ""),
                 "company_size": org.get("estimated_num_employees", ""),
                 "company_revenue": org.get("annual_revenue_printed", ""),
-                "source":       "Apollo.io",
+                "source": "Apollo.io",
             }
+            if additional:
+                result["additional_contacts"] = additional
+            return result
     except Exception as e:
         logger.debug(f"[Apollo.io] Error: {e}")
     return {}

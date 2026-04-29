@@ -1237,6 +1237,23 @@ class PermitsAgent(BaseAgent):
             fields["💼 Cargo"] = lead["position"]
         if lead.get("linkedin"):
             fields["🔗 LinkedIn"] = lead["linkedin"]
+        # Additional contacts from the enrichment cascade
+        extra = lead.get("additional_contacts") or (
+            lead.get("enrichment_log") or {}
+        ).get("additional_contacts") or []
+        for i, c in enumerate(extra[:4], start=2):
+            name = c.get("name") or ""
+            pos = c.get("position") or ""
+            label = f"{name} ({pos})" if pos else (name or f"Contacto {i}")
+            parts = []
+            if c.get("phone"):
+                parts.append(f"📞 {c['phone']}")
+            if c.get("email"):
+                parts.append(f"✉️ {c['email']}")
+            if c.get("linkedin_url"):
+                parts.append(f"🔗 {c['linkedin_url']}")
+            if parts:
+                fields[f"👤 {label}"] = "  ".join(parts)
         # Reachability score — how many independent channels we have
         # to reach this GC (phone / email / website / linkedin).
         fields["📊 Calidad de contacto"] = contact_quality_label(

@@ -127,6 +127,29 @@ def _format_context_block(lead: Lead) -> str:
     if lead.contact_source:
         lines.append(f"🔎 Contact via: {lead.contact_source}")
 
+    # Additional contacts from enrichment (up to 4 more GC team members)
+    extra_contacts = (lead.enrichment_log or {}).get("additional_contacts", [])
+    if extra_contacts:
+        lines.append("👥 Contactos adicionales:")
+        for c in extra_contacts[:4]:
+            name = c.get("name") or ""
+            pos = c.get("position") or ""
+            label = f"{name} ({pos})" if pos else name
+            bits = []
+            if c.get("phone"):
+                bits.append(f"📞 {c['phone']}")
+            if c.get("email"):
+                bits.append(f"✉️ {c['email']}")
+            if c.get("linkedin_url"):
+                bits.append(f"🔗 {c['linkedin_url']}")
+            contact_line = "  ".join(bits)
+            if label and contact_line:
+                lines.append(f"  • {label} — {contact_line}")
+            elif label:
+                lines.append(f"  • {label}")
+            elif contact_line:
+                lines.append(f"  • {contact_line}")
+
     # Scores
     score_bits: list[str] = []
     if lead.qualification_score is not None:
