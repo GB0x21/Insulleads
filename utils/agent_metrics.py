@@ -26,19 +26,32 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
 
-# Circuit breaker: cuántos fallos consecutivos antes de pausar
-CB_THRESHOLD       = int(os.getenv("CB_THRESHOLD", "3"))
-# Backoff base en minutos cuando el circuit breaker se activa
-CB_BACKOFF_BASE_MIN = int(os.getenv("CB_BACKOFF_BASE_MIN", "15"))
-# Máximo backoff en minutos
-CB_BACKOFF_MAX_MIN  = int(os.getenv("CB_BACKOFF_MAX_MIN", "240"))
 
-# Adaptive intervals: ventana de historial (últimas N ejecuciones)
-ADAPTIVE_WINDOW = int(os.getenv("ADAPTIVE_WINDOW", "10"))
-# Si el agente produce ≥ este promedio de leads → reducir intervalo 30%
-PRODUCTIVE_THRESHOLD = float(os.getenv("PRODUCTIVE_THRESHOLD", "2.0"))
-# Si produce < este promedio → aumentar intervalo 50%
-QUIET_THRESHOLD = float(os.getenv("QUIET_THRESHOLD", "0.5"))
+def _env_int(key: str, default: int) -> int:
+    """Parse an env var as int, stripping inline shell comments (# ...)."""
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(key: str, default: float) -> float:
+    """Parse an env var as float, stripping inline shell comments (# ...)."""
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+CB_THRESHOLD        = _env_int("CB_THRESHOLD", 3)
+CB_BACKOFF_BASE_MIN = _env_int("CB_BACKOFF_BASE_MIN", 15)
+CB_BACKOFF_MAX_MIN  = _env_int("CB_BACKOFF_MAX_MIN", 240)
+
+ADAPTIVE_WINDOW      = _env_int("ADAPTIVE_WINDOW", 10)
+PRODUCTIVE_THRESHOLD = _env_float("PRODUCTIVE_THRESHOLD", 2.0)
+QUIET_THRESHOLD      = _env_float("QUIET_THRESHOLD", 0.5)
 
 
 def _conn() -> sqlite3.Connection:

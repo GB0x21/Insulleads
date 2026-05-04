@@ -261,7 +261,8 @@ def cmd_start():
         if not _is_enabled(cfg["env_key"]):
             logger.info(f"[{key}] Desactivado — omitido")
             continue
-        interval = int(os.getenv(cfg["interval_key"], cfg["default_interval"]))
+        raw_iv = os.getenv(cfg["interval_key"], str(cfg["default_interval"])).split("#")[0].strip()
+        interval = int(raw_iv) if raw_iv.isdigit() else cfg["default_interval"]
         set_base_interval(key, interval)   # Base para que adaptativo funcione
         schedules.append(AgentSchedule(key, interval))
         _get_or_create_agent(key)          # Pre-instanciar singleton
@@ -276,7 +277,8 @@ def cmd_start():
     )
 
     # Health report configuración
-    health_interval_min = int(os.getenv("HEALTH_INTERVAL_MIN", "120"))
+    raw_hi = os.getenv("HEALTH_INTERVAL_MIN", "120").split("#")[0].strip()
+    health_interval_min = int(raw_hi) if raw_hi.isdigit() else 120
     health_interval_s   = health_interval_min * 60
     last_health_report  = time.monotonic() - health_interval_s  # Enviar de inmediato al arrancar
 
