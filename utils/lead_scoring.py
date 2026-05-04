@@ -224,10 +224,60 @@ def score_lead(lead: dict) -> dict:
     }
 
 
+def score_lead_with_memory(lead: dict) -> dict:
+    """
+    Versión extendida de score_lead que incorpora memoria de conversiones.
+
+    Añade hasta +15 puntos bonus (o -10 penalty) basados en:
+      - Historial del contratista (WON previos)
+      - Ratio de conversión de la ciudad
+      - Similitud vectorial con leads históricos que resultaron en WON/LOST
+
+    Requiere que haya suficientes outcomes registrados (MIN_OUTCOMES_FOR_SIGNAL).
+    Si no hay historial, se comporta igual que score_lead().
+    """
+    base = score_lead(lead)
+
+    try:
+        from utils.lead_outcomes import outcome_memory_bonus
+        bonus, memory_reasons = outcome_memory_bonus(lead)
+    except Exception as e:
+        logger.debug(f"[scoring] memory bonus omitido: {e}")
+        return base
+
+    if bonus == 0 and not memory_reasons:
+        return base
+
+    new_score = max(0, min(100, base["score"] + bonus))
+
+    if new_score >= 90:
+        grade, emoji = "HOT", "🔥"
+    elif new_score >= 70:
+        grade, emoji = "WARM", "🟠"
+    elif new_score >= 50:
+        grade, emoji = "MEDIUM", "🟡"
+    elif new_score >= 25:
+        grade, emoji = "COOL", "🔵"
+    else:
+        grade, emoji = "COLD", "⚪"
+
+    all_reasons = (base["reasons"] + memory_reasons)[:3]
+
+    return {
+        "score":        new_score,
+        "grade":        grade,
+        "grade_emoji":  emoji,
+        "reasons":      all_reasons,
+        "base_score":   base["score"],
+        "memory_bonus": bonus,
+    }
+
+
 def format_score_line(scoring: dict) -> str:
     """Formatea el score para Telegram."""
     s = scoring
     reasons_str = " | ".join(s["reasons"]) if s["reasons"] else ""
-    return f"{s['grade_emoji']} {s['score']}/100 ({s['grade']})" + (
+    memory_tag  = f" [+mem:{s['memory_bonus']:+d}]" if s.get("memory_bonus") else ""
+    return f"{s['grade_emoji']} {s['score']}/100 ({s['grade']}){memory_tag}" + (
         f" — {reasons_str}" if reasons_str else ""
     )

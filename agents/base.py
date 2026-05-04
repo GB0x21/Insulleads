@@ -1,16 +1,21 @@
 """
-agents/base.py  v7
+agents/base.py  v8
 ━━━━━━━━━━━━━━━━━
 Clase base para todos los agentes.
 
+v8 (Fase 2 — claude-mem inspired):
+  1. Memory Engine — cada ciclo registra observaciones en utils/memory.py.
+     El agente acumula conocimiento que enriquece futuros ciclos.
+  2. Memory-enhanced scoring — usa score_lead_with_memory() que incorpora
+     el historial de conversiones WON/LOST para ajustar el score ±15pts.
+  3. Observaciones estructuradas: lead_found, lead_sent, pattern, insight.
+  4. Context injection: el agente puede consultar su propia memoria antes
+     de procesar leads (paralelo al context injection de claude-mem).
+
 v7 (Fase 1 — Hermes-style):
-  1. Learning Loop — cada ciclo registra métricas en agent_metrics.py.
-     El scheduler lee esas métricas para adaptive intervals y circuit breaker.
-  2. Multi-canal routing — los leads se enrutan según su score:
-       🔥 HOT  (≥90): Telegram + WhatsApp + Email
-       🟠 WARM (≥70): Telegram + Email
-       🟡 MEDIUM-COLD: Telegram solamente
-  3. Filtro de contacto — igual que v6: sin teléfono ni email no se envía.
+  1. Learning Loop — métricas de ciclo en agent_metrics.py.
+  2. Multi-canal routing — Telegram + WhatsApp + Email según score.
+  3. Filtro de contacto — sin teléfono ni email no se envía.
 """
 
 import logging
@@ -21,9 +26,10 @@ from utils.db import is_sent, mark_sent
 from utils.telegram import send_message
 from utils.dedup import get_dedup_engine
 from utils.hot_zones import get_hot_zone_detector, format_hot_zone_alert
-from utils.lead_scoring import score_lead
+from utils.lead_scoring import score_lead_with_memory
 from utils.notifications import send_lead_whatsapp, send_lead_email
 from utils.agent_metrics import record_run
+from utils.memory import record_observation, get_context, get_agent_patterns
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +54,17 @@ class BaseAgent(ABC):
     @abstractmethod
     def notify(self, lead: dict):
         ...
+
+    def get_memory_context(self, query: str = "") -> str:
+        """
+        Retorna contexto de memoria relevante para este agente.
+        Análogo al context injection de claude-mem — enriquece el ciclo
+        con aprendizajes de ciclos anteriores.
+        """
+        try:
+            return get_context(self.agent_key, query=query, max_tokens=300)
+        except Exception:
+            return ""
 
     def send_if_new(self, lead: dict) -> bool:
         """Envía el lead solo si no fue enviado antes y tiene datos de contacto."""
@@ -77,14 +94,15 @@ class BaseAgent(ABC):
         Envía una lista de leads nuevos con:
           1. Deduplicación cross-agent
           2. Filtro de contacto
-          3. Lead scoring (Hermes-style: score → canal)
+          3. Memory-enhanced scoring (Fase 2: +/- pts de historial de conversiones)
           4. Multi-canal routing por score
           5. Hot zone detection
-          6. Learning loop — registra métricas del ciclo
+          6. Registro de observaciones en memoria (Fase 2: claude-mem style)
+          7. Learning loop — métricas del ciclo (Fase 1)
 
         Retorna el número de leads nuevos enviados.
         """
-        t_start = time.monotonic()
+        t_start   = time.monotonic()
         error_msg = None
         sent_count = 0
 
@@ -103,6 +121,10 @@ class BaseAgent(ABC):
                 l for l in enriched_leads
                 if l.get("id") and not is_sent(self.agent_key, l["id"])
             ]
+
+            # Registrar observación de ciclo en memoria (leads encontrados)
+            if new_leads:
+                self._record_cycle_observations(new_leads)
 
             if not new_leads:
                 return 0
@@ -124,10 +146,13 @@ class BaseAgent(ABC):
             for lead in leads_with_contact:
                 hz_detector.add_lead(lead)
 
-            # Paso 5: Enviar con multi-canal routing por score
+            # Paso 5: Enviar con memory-enhanced scoring y multi-canal
             for lead in leads_with_contact:
                 try:
-                    scoring = score_lead(lead)
+                    lead["_agent_key"] = self.agent_key
+
+                    # Fase 2: scoring enriquecido con memoria de conversiones
+                    scoring = score_lead_with_memory(lead)
                     lead["_scoring"] = scoring
 
                     # Canal principal: siempre Telegram
@@ -136,7 +161,10 @@ class BaseAgent(ABC):
                     dedup.mark_notified(lead.get("address", ""), lead.get("city", ""))
                     sent_count += 1
 
-                    # Canales adicionales según score (Hermes multi-canal)
+                    # Registrar en memoria como lead_sent
+                    self._record_lead_sent(lead, scoring)
+
+                    # Canales adicionales según score
                     self._route_multichannel(lead, scoring)
 
                 except Exception as e:
@@ -148,6 +176,8 @@ class BaseAgent(ABC):
                 try:
                     alert_msg = format_hot_zone_alert(zone)
                     send_message(alert_msg)
+                    # Registrar hot zone como pattern en memoria
+                    self._record_hot_zone(zone)
                     logger.info(
                         f"[HotZone] Zona detectada: {', '.join(zone['cities'])} — "
                         f"{zone['lead_count']} leads, {zone['agent_count']} agentes"
@@ -170,7 +200,7 @@ class BaseAgent(ABC):
             logger.error(f"[{self.agent_key}] Error en send_batch: {e}", exc_info=True)
 
         finally:
-            # Learning Loop: registrar métricas de este ciclo
+            # Learning Loop Fase 1: registrar métricas de este ciclo
             duration = time.monotonic() - t_start
             try:
                 record_run(
@@ -185,9 +215,79 @@ class BaseAgent(ABC):
 
         return sent_count
 
+    # ── Métodos de memoria (Fase 2 — claude-mem style) ─────────────────────────
+
+    def _record_cycle_observations(self, new_leads: list):
+        """Registra observaciones de leads encontrados en este ciclo."""
+        try:
+            for lead in new_leads[:10]:  # Max 10 para no saturar
+                city    = lead.get("city", "")
+                addr    = lead.get("address", "")
+                ptype   = lead.get("permit_type") or lead.get("description", "")[:60]
+                content = f"{city} — {addr}: {ptype}".strip(" —:")
+
+                record_observation(
+                    agent_key=self.agent_key,
+                    obs_type="lead_found",
+                    content=content,
+                    metadata={
+                        "city":        city,
+                        "address":     addr,
+                        "permit_type": ptype,
+                        "value_float": lead.get("value_float", 0),
+                        "has_phone":   bool(lead.get("contact_phone") or lead.get("phone")),
+                        "has_email":   bool(lead.get("contact_email")),
+                    },
+                )
+        except Exception as e:
+            logger.debug(f"[{self.agent_key}] Error registrando observaciones: {e}")
+
+    def _record_lead_sent(self, lead: dict, scoring: dict):
+        """Registra un lead enviado en la memoria del agente."""
+        try:
+            city    = lead.get("city", "")
+            addr    = lead.get("address", "")
+            score   = scoring.get("score", 0)
+            grade   = scoring.get("grade", "")
+            content = f"Enviado [{grade} {score}/100] {city} — {addr}"
+
+            record_observation(
+                agent_key=self.agent_key,
+                obs_type="lead_sent",
+                content=content,
+                metadata={
+                    "city":        city,
+                    "address":     addr,
+                    "score":       score,
+                    "grade":       grade,
+                    "contractor":  lead.get("contractor", ""),
+                    "value_float": lead.get("value_float", 0),
+                    "memory_bonus": scoring.get("memory_bonus", 0),
+                },
+            )
+        except Exception as e:
+            logger.debug(f"[{self.agent_key}] Error registrando lead_sent: {e}")
+
+    def _record_hot_zone(self, zone: dict):
+        """Registra una hot zone detectada como pattern en memoria."""
+        try:
+            cities  = ", ".join(zone.get("cities", []))
+            content = (
+                f"Hot Zone detectada: {cities} — "
+                f"{zone.get('lead_count', 0)} leads en {zone.get('agent_count', 0)} agentes"
+            )
+            record_observation(
+                agent_key=self.agent_key,
+                obs_type="pattern",
+                content=content,
+                metadata={"zone": zone},
+            )
+        except Exception as e:
+            logger.debug(f"[{self.agent_key}] Error registrando hot zone: {e}")
+
     def _route_multichannel(self, lead: dict, scoring: dict):
         """
-        Routing multi-canal Hermes-style según score del lead:
+        Routing multi-canal según score del lead:
           🔥 HOT  (≥90): WhatsApp + Email
           🟠 WARM (≥70): Email
           🟡 Resto:       Solo Telegram (ya enviado)
