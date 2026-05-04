@@ -62,6 +62,13 @@ AGENT_TO_SOURCE = {
     "places":         "Google Places",
     "yelp":           "Yelp",
     "deconstruction": "Demolicion",
+    "accela":         "Accela / IVARA Permisos",
+    "dins":           "Cal Fire DINS",
+    "hud_multifamily": "HUD Multifamiliar",
+    "shovels":        "Shovels.ai Permisos",
+    "thermal":        "Anomalia Termica",
+    "email_prospect": "Email Prospect",
+    "web_crawler":    "Web Crawler",
 }
 
 
@@ -202,6 +209,13 @@ class CRMSync:
         "places":         "Google Places",
         "yelp":           "Yelp",
         "deconstruction": "Demolicion",
+        "accela":         "Accela / IVARA Permisos",
+        "dins":           "Cal Fire DINS",
+        "hud_multifamily": "HUD Multifamiliar",
+        "shovels":        "Shovels.ai Permisos",
+        "thermal":        "Anomalia Termica",
+        "email_prospect": "Email Prospect",
+        "web_crawler":    "Web Crawler",
     }
 
     def __init__(self):
@@ -798,12 +812,11 @@ class CRMSync:
             if source_name and source_name in self._tag_cache:
                 tag_ids.append(self._tag_cache[source_name])
 
-        # Insert taggables entries
+        # Insert lead_tags entries (Krayin uses per-entity pivot tables, not a generic taggables)
         for tag_id in tag_ids:
             _mysql_insert(
                 self.creds,
-                f"INSERT INTO taggables (tag_id, taggable_id, taggable_type) "
-                f"VALUES ({tag_id}, {lead_id}, 'Webkul\\\\Lead\\\\Models\\\\Lead')"
+                f"INSERT IGNORE INTO lead_tags (tag_id, lead_id) VALUES ({tag_id}, {lead_id})"
             )
 
     def sync(self):
