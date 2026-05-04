@@ -38,6 +38,13 @@ def init_db():
     except Exception as e:
         logger.warning(f"[init_db] agent_metrics: {e}")
 
+    # Deduplicación: crear tablas de consolidación (necesario para crm_sync)
+    try:
+        from utils.dedup import get_dedup_engine
+        get_dedup_engine()  # Instancia singleton y crea tablas
+    except Exception as e:
+        logger.warning(f"[init_db] dedup: {e}")
+
     # Fase 2: tablas de memoria y outcomes
     try:
         from utils.memory import init_memory_db
