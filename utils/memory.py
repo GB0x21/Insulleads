@@ -39,10 +39,17 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
 
-# Cuántas observaciones mantener antes de comprimir (similar al window de claude-mem)
-MEMORY_WINDOW     = int(os.getenv("MEMORY_WINDOW", "200"))
-# Cuántas observaciones usar para generar un resumen comprimido
-COMPRESS_TRIGGER  = int(os.getenv("MEMORY_COMPRESS_TRIGGER", "50"))
+
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+MEMORY_WINDOW    = _env_int("MEMORY_WINDOW", 200)
+COMPRESS_TRIGGER = _env_int("MEMORY_COMPRESS_TRIGGER", 50)
 # Dimensión del hash embedding
 EMBED_DIM         = 64
 
