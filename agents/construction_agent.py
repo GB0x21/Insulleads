@@ -24,10 +24,12 @@ Fuentes de pago:
 
 import os
 import re
+import time
 import logging
 import requests
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from bs4 import BeautifulSoup
 
 from agents.base import BaseAgent
 from utils.telegram import send_lead
@@ -35,6 +37,8 @@ from utils.contacts_loader import load_all_contacts, lookup_contact
 from utils.lead_scoring import score_lead, format_score_line
 from utils.notifications import notify_multichannel
 from utils.inspection_schedule import get_next_visit_window
+from utils import cslb_bulk
+from utils.contact_enrichment import enrich_contact as _ext_enrich
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,51 @@ SOURCE_TIMEOUT      = int(os.getenv("SOURCE_TIMEOUT", "45"))
 CONSTRUCTION_MONTHS = int(os.getenv("CONSTRUCTION_MONTHS", "1"))
 PARALLEL_INSPECT    = int(os.getenv("PARALLEL_INSPECT", "6"))
 BUILDZOOM_API_KEY   = os.getenv("BUILDZOOM_API_KEY", "")
+
+_CSLB_URL = "https://www2.cslb.ca.gov/OnlineServices/CheckLicenseII/CheckLicense.aspx"
+_CSLB_HDR = {"User-Agent": "Mozilla/5.0 (compatible; LeadBot/1.0)"}
+
+
+def _cslb_scrape(license_number: str = None, company_name: str = None) -> dict:
+    """CSLB web scraper — by license number or company name. Returns phone, name, city, status."""
+    result = {}
+    try:
+        s = requests.Session()
+        s.headers.update(_CSLB_HDR)
+        r = s.get(_CSLB_URL, timeout=10)
+        r.raise_for_status()
+        hidden = {t.get("name", ""): t.get("value", "")
+                  for t in BeautifulSoup(r.text, "html.parser").find_all("input", {"type": "hidden"})}
+        if license_number and re.match(r"^\d{4,}$", str(license_number).strip()):
+            val, typ = str(license_number).strip(), "License"
+        elif company_name:
+            val, typ = company_name.strip()[:50], "Business"
+        else:
+            return result
+        payload = {
+            **hidden,
+            "ctl00$ContentPlaceHolder1$RadioButtonList1": typ,
+            "ctl00$ContentPlaceHolder1$TextBox1": val,
+            "ctl00$ContentPlaceHolder1$Button1": "Submit",
+        }
+        r2 = s.post(_CSLB_URL, data=payload, timeout=10)
+        r2.raise_for_status()
+        soup2 = BeautifulSoup(r2.text, "html.parser")
+        table = (soup2.find("table", {"id": re.compile(r"Grid|Results|License", re.I)})
+                 or soup2.find("table"))
+        if table:
+            for row in table.find_all("tr")[1:2]:
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) >= 3:
+                    result = {
+                        "phone":       cells[3] if len(cells) > 3 else "",
+                        "cslb_name":   cells[1] if len(cells) > 1 else "",
+                        "cslb_city":   cells[2] if len(cells) > 2 else "",
+                        "cslb_status": cells[4] if len(cells) > 4 else "",
+                    }
+    except Exception as e:
+        logger.debug(f"[CSLB] scrape error: {e}")
+    return result
 
 
 def _cutoff_iso() -> str:
@@ -60,65 +109,29 @@ def _parse_value(v) -> float:
 # ── Fases de construcción y su relevancia para insulación ────────────
 
 CONSTRUCTION_PHASES = {
-    # Fase temprana — proyecto arrancando
-    "foundation": {
-        "keywords": ["FOUNDATION", "FOOTING", "SLAB", "EXCAVATION", "GRADING",
-                      "CIMENTACION", "LOSA"],
-        "phase_order": 1,
-        "timing":      "🔵 Temprano",
-        "action":      "Proyecto iniciando. Contactar para cotización anticipada.",
-        "priority":    2,
-    },
-    # Fase estructural — TIMING PERFECTO
+    # Fase estructural — TIMING PERFECTO para insulación
     "framing": {
         "keywords": ["FRAMING", "FRAME", "ROUGH FRAME", "STRUCTURAL",
                       "SHEATHING", "SHEAR WALL", "ESTRUCTURA", "FRAME ROUGH",
                       "TOP OUT", "ROUGH FRAMING"],
-        "phase_order": 2,
+        "phase_order": 1,
         "timing":      "🔥 AHORA",
         "action":      "¡Estructura lista! Insulación es el SIGUIENTE paso. ¡CONTACTAR YA!",
         "priority":    5,
     },
-    # Fase de sistemas MEP — oportunidad activa
+    # Fase de sistemas MEP — ventana activa
     "rough_mep": {
         "keywords": ["ROUGH PLUMBING", "ROUGH ELECTRIC", "ROUGH MECHANICAL",
                       "ROUGH MEP", "MEP ROUGH", "ROUGH-IN", "HVAC ROUGH",
                       "DUCTWORK", "DUCTOS"],
-        "phase_order": 3,
+        "phase_order": 2,
         "timing":      "🟠 Oportunidad",
-        "action":      "MEP en progreso. Insulación se instala junto o justo después.",
+        "action":      "MEP en progreso. Insulación se instala justo después. Contactar HOY.",
         "priority":    4,
     },
-    # Fase de insulación — ver quién lo está haciendo
-    "insulation": {
-        "keywords": ["INSULATION", "INSULATE", "BATT INSUL", "SPRAY FOAM",
-                      "BLOWN IN", "THERMAL", "R-VALUE", "VAPOR BARRIER",
-                      "AISLAMIENTO", "INSULACION", "ENERGY COMPLIANCE",
-                      "TITLE 24"],
-        "phase_order": 4,
-        "timing":      "⚡ EN CURSO",
-        "action":      "Insulación en progreso. ¿Quién es el subcontratista? Ofrecer alternativa.",
-        "priority":    3,
-    },
-    # Fase de cierre — tarde pero posible
-    "drywall": {
-        "keywords": ["DRYWALL", "LATH", "PLASTER", "STUCCO", "EXTERIOR FINISH",
-                      "WALL COVER", "SHEETROCK"],
-        "phase_order": 5,
-        "timing":      "🟡 Último chance",
-        "action":      "Paredes cerrándose. Aún posible blown-in o correcciones.",
-        "priority":    2,
-    },
-    # Inspección final — oportunidad para upgrades
-    "final": {
-        "keywords": ["FINAL INSPECTION", "FINAL BLDG", "FINAL BUILDING",
-                      "FINAL COMBO", "CERTIFICATE OF OCCUPANCY", "C OF O",
-                      "TCO", "FINAL SIGN"],
-        "phase_order": 6,
-        "timing":      "✅ Completado",
-        "action":      "Proyecto terminado. Ofrecer mejoras futuras / mantenimiento.",
-        "priority":    1,
-    },
+    # Fases excluidas — insulación ya fue instalada o aún no hay estructura:
+    # foundation (muy temprano), insulation (ya en curso), drywall (tarde),
+    # final (terminado). No generan leads útiles para subcontratista.
 }
 
 
@@ -140,55 +153,28 @@ def _classify_phase(inspection_text: str) -> dict | None:
 # ── Fuentes de inspecciones — ciudades Bay Area ─────────────────────
 
 INSPECTION_SOURCES = [
-    # ── SF Building Inspections ──────────────────────────────────
-    {
-        "city":    "San Francisco",
-        "engine":  "socrata",
-        "url":     "https://data.sfgov.org/resource/biys-ruxt.json",
-        "timeout": SOURCE_TIMEOUT,
-        "params": {
-            "$limit": 200,
-            "$order": "inspection_date DESC",
-            "$where": (
-                "inspection_date >= '{cutoff_iso}' "
-                "AND (UPPER(inspection_type_description) LIKE '%FRAME%' "
-                "OR UPPER(inspection_type_description) LIKE '%INSULATION%' "
-                "OR UPPER(inspection_type_description) LIKE '%ROUGH%' "
-                "OR UPPER(inspection_type_description) LIKE '%DRYWALL%' "
-                "OR UPPER(inspection_type_description) LIKE '%FOUNDATION%' "
-                "OR UPPER(inspection_type_description) LIKE '%FINAL%')"
-            ),
-        },
-        "field_map": {
-            "id":           "complaint_number",
-            "permit_id":    "permit_number",
-            "address":      "block",
-            "address2":     "lot",
-            "inspection":   "inspection_type_description",
-            "status":       "inspection_status",
-            "date":         "inspection_date",
-            "inspector":    "inspector",
-            "result":       "inspection_status",
-            "contractor":   "contractor_name",
-            "owner":        "property_owner",
-        },
-    },
-    # ── SF Permit Activity (complementario) ──────────────────────
+    # ── SF Permit Activity — fuente principal SF ──────────────────
+    # Dataset i98e-djp9: permisos emitidos con tipo de trabajo en descripción.
+    # biys-ruxt fue retirado por SF DBI (devuelve 404 desde 2026).
     {
         "city":    "San Francisco",
         "engine":  "socrata",
         "url":     "https://data.sfgov.org/resource/i98e-djp9.json",
         "timeout": SOURCE_TIMEOUT,
         "params": {
-            "$limit": 100,
+            "$limit": 200,
             "$order": "issued_date DESC",
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND status IN('issued','complete') "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
-                "OR UPPER(description) LIKE '%ROUGH%' "
-                "OR UPPER(description) LIKE '%STRUCTURE%')"
+                "OR UPPER(description) LIKE '%ROUGH PLUMBING%' "
+                "OR UPPER(description) LIKE '%ROUGH ELECTRIC%' "
+                "OR UPPER(description) LIKE '%ROUGH MECHANICAL%' "
+                "OR UPPER(description) LIKE '%ROUGH-IN%' "
+                "OR UPPER(description) LIKE '%HVAC ROUGH%' "
+                "OR UPPER(description) LIKE '%STRUCTURAL%' "
+                "OR UPPER(description) LIKE '%SHEATHING%')"
             ),
         },
         "field_map": {
@@ -196,6 +182,7 @@ INSPECTION_SOURCES = [
             "permit_id":    "permit_number",
             "address":      "street_number",
             "address2":     "street_name",
+            "address3":     "street_suffix",
             "inspection":   "description",
             "status":       "status",
             "date":         "issued_date",
@@ -242,7 +229,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "application_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -272,7 +258,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issueddate >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -302,7 +287,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issue_date >= '{cutoff_iso}' "
                 "AND (UPPER(project_description) LIKE '%FRAME%' "
-                "OR UPPER(project_description) LIKE '%INSULATION%' "
                 "OR UPPER(project_description) LIKE '%ROUGH%')"
             ),
         },
@@ -333,7 +317,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -363,7 +346,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -393,7 +375,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -423,7 +404,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -453,7 +433,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -483,7 +462,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -513,7 +491,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -543,7 +520,6 @@ INSPECTION_SOURCES = [
             "$where": (
                 "issued_date >= '{cutoff_iso}' "
                 "AND (UPPER(description) LIKE '%FRAME%' "
-                "OR UPPER(description) LIKE '%INSULATION%' "
                 "OR UPPER(description) LIKE '%ROUGH%')"
             ),
         },
@@ -668,7 +644,75 @@ class ConstructionAgent(BaseAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._contacts = load_all_contacts()
+        self._contacts   = load_all_contacts()
+        self._cslb_cache = {}
+
+    def _enrich_gc(self, lead: dict) -> dict:
+        """Three-tier contact enrichment cascade.
+
+        Tier 1: Local CSV (by contractor name)
+        Tier 2: CSLB bulk index → scraper (by license number, then company)
+        Tier 3+4: Hunter.io / Apollo.io (email finder)
+        """
+        contractor  = (lead.get("contractor") or "").strip()
+        lic_number  = (lead.get("lic_number") or "").strip()
+        owner       = (lead.get("owner") or "").strip()
+        search_name = contractor or owner
+        cache_key   = lic_number or search_name
+        if not cache_key:
+            return {}
+        if cache_key in self._cslb_cache:
+            return self._cslb_cache[cache_key]
+
+        enrichment: dict = {}
+
+        # Tier 1: local CSV (name fuzzy match)
+        if search_name:
+            match = lookup_contact(search_name, self._contacts)
+            if match:
+                if match.get("phone"):
+                    enrichment["contact_phone"] = match["phone"]
+                if match.get("email"):
+                    enrichment["contact_email"] = match["email"]
+                enrichment["contact_source"] = f"CSV ({match['source']})"
+
+        # Tier 2: CSLB bulk index first, then web scraper
+        if lic_number or search_name:
+            cslb: dict = {}
+            if lic_number:
+                cslb = cslb_bulk.lookup(license_number=lic_number)
+            if not cslb.get("phone") and contractor:
+                cslb = cslb_bulk.lookup(company_name=contractor)
+            # Fallback: CSLB web scraper
+            if not cslb:
+                time.sleep(0.3)
+                if lic_number:
+                    cslb = _cslb_scrape(license_number=lic_number)
+                if not cslb.get("phone") and contractor:
+                    cslb = _cslb_scrape(company_name=contractor)
+                if not cslb.get("phone") and owner and owner != contractor:
+                    cslb = _cslb_scrape(company_name=owner)
+            if cslb.get("phone") and not enrichment.get("contact_phone"):
+                enrichment["contact_phone"] = cslb["phone"]
+                src = enrichment.get("contact_source")
+                enrichment["contact_source"] = f"{src} + CSLB" if src else "CSLB"
+
+        # Tier 3+4: Hunter.io / Apollo.io (email only when still missing)
+        if not enrichment.get("contact_email") and search_name:
+            try:
+                ext = _ext_enrich(company_name=search_name, person_name=contractor)
+                if ext.get("email"):
+                    enrichment["contact_email"] = ext["email"]
+                    if ext.get("phone") and not enrichment.get("contact_phone"):
+                        enrichment["contact_phone"] = ext["phone"]
+                    src = enrichment.get("contact_source")
+                    tag = ext.get("source", "Hunter/Apollo")
+                    enrichment["contact_source"] = f"{src} + {tag}" if src else tag
+            except Exception as e:
+                logger.debug(f"[Hunter/Apollo] error: {e}")
+
+        self._cslb_cache[cache_key] = enrichment
+        return enrichment
 
     def fetch_leads(self) -> list:
         leads = []
@@ -697,6 +741,8 @@ class ConstructionAgent(BaseAgent):
                         addr = get(raw, "address")
                         if fm.get("address2") and raw.get(fm.get("address2", "") or ""):
                             addr = f"{addr} {raw[fm['address2']]}".strip()
+                        if fm.get("address3") and raw.get(fm.get("address3", "") or ""):
+                            addr = f"{addr} {raw[fm['address3']]}".strip()
 
                         value = _parse_value(get(raw, "value"))
 
@@ -724,14 +770,11 @@ class ConstructionAgent(BaseAgent):
                             "_agent_key":   "construction",
                         }
 
-                        # Enriquecer contacto GC
-                        contractor = lead["contractor"]
-                        if contractor:
-                            match = lookup_contact(contractor, self._contacts)
-                            if match:
-                                lead["contact_phone"]  = match.get("phone", "")
-                                lead["contact_email"]  = match.get("email", "")
-                                lead["contact_source"] = f"CSV ({match['source']})"
+                        # Enriquecer contacto GC — CSV → CSLB → Hunter/Apollo
+                        enrichment = self._enrich_gc(lead)
+                        for _k in ("contact_phone", "contact_email", "contact_source"):
+                            if enrichment.get(_k):
+                                lead[_k] = enrichment[_k]
 
                         # Lead scoring
                         scoring = score_lead(lead)
@@ -814,13 +857,11 @@ class ConstructionAgent(BaseAgent):
             "_agent_key":   "construction",
         }
 
-        # Contacto
-        if lead["contractor"]:
-            match = lookup_contact(lead["contractor"], self._contacts)
-            if match:
-                lead["contact_phone"]  = match.get("phone", "")
-                lead["contact_email"]  = match.get("email", "")
-                lead["contact_source"] = f"CSV ({match['source']})"
+        # Enriquecer contacto GC
+        enrichment = self._enrich_gc(lead)
+        for _k in ("contact_phone", "contact_email", "contact_source"):
+            if enrichment.get(_k):
+                lead[_k] = enrichment[_k]
 
         scoring = score_lead(lead)
         lead["_scoring"] = scoring

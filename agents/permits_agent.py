@@ -45,6 +45,7 @@ PARALLEL_CITIES  = int(os.getenv("PARALLEL_CITIES", "6"))
 MIN_PERMIT_VALUE = float(os.getenv("MIN_PERMIT_VALUE", "50000"))
 PERMIT_MONTHS    = int(os.getenv("PERMIT_MONTHS", "3"))
 SOURCE_TIMEOUT   = int(os.getenv("SOURCE_TIMEOUT", "45"))
+HTTP_RETRIES     = int(os.getenv("HTTP_RETRIES", "2"))
 
 # Tier-5 (LLM web_search) is the most expensive enrichment step in the
 # cascade — one Anthropic call per uncached contractor. Off-by-default
@@ -846,30 +847,53 @@ def _cslb_lookup(license_number: str = None, company_name: str = None) -> dict:
 
 # ── Parsers ────────────────────────────────────────────────────────
 
+def _http_get(url: str, *, params=None, headers=None, timeout: int = 30) -> requests.Response:
+    """requests.get with exponential-backoff retry on transient failures.
+
+    Retries on: Timeout, ConnectionError, and HTTP 429 (rate limit).
+    All other HTTP errors propagate immediately.
+    """
+    last_exc: Exception = RuntimeError("no attempts made")
+    for attempt in range(HTTP_RETRIES + 1):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+            if resp.status_code == 429:
+                wait = 2 ** (attempt + 1)
+                logger.debug("[http] 429 from %s — waiting %ds (attempt %d)", url, wait, attempt + 1)
+                if attempt < HTTP_RETRIES:
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+            resp.raise_for_status()
+            return resp
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            last_exc = exc
+            if attempt < HTTP_RETRIES:
+                wait = 2 ** attempt
+                logger.debug("[http] %s on %s — retrying in %ds", type(exc).__name__, url, wait)
+                time.sleep(wait)
+    raise last_exc
+
+
 def _fetch_socrata(source: dict) -> list:
     headers = {"Accept": "application/json"}
     token = os.getenv("SOCRATA_APP_TOKEN", "")
     if token:
         headers["X-App-Token"] = token
-    resp = requests.get(source["url"], params=source["params"],
-                        timeout=source.get("timeout", 30), headers=headers)
-    resp.raise_for_status()
+    resp = _http_get(source["url"], params=source["params"],
+                     timeout=source.get("timeout", 30), headers=headers)
     data = resp.json()
     return data if isinstance(data, list) else []
 
 
 def _fetch_ckan_sql(source: dict) -> list:
-    """
-    CKAN datastore_search_sql — filtra server-side con WHERE.
-    Mucho más rápido que el dump o ckan_search sin filtro.
-    """
-    resp = requests.get(
+    """CKAN datastore_search_sql — filtra server-side con WHERE."""
+    resp = _http_get(
         source["url"],
         params=source["params"],
         timeout=source.get("timeout", 30),
         headers={"Accept": "application/json"},
     )
-    resp.raise_for_status()
     data = resp.json()
     if not data.get("success"):
         err = data.get("error", {})

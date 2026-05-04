@@ -250,11 +250,16 @@ class DeduplicationEngine:
             with self._get_conn() as conn:
                 conn.execute("""
                     INSERT OR REPLACE INTO consolidated_leads
-                    (address_key, address, city, agent_sources, first_seen, last_updated, lead_data, notified)
-                    VALUES (?, ?, ?, ?, COALESCE(
-                        (SELECT first_seen FROM consolidated_leads WHERE address_key = ?),
-                        ?
-                    ), ?, ?, 0)
+                    (address_key, address, city, agent_sources, first_seen, last_updated,
+                     lead_data, notified, crm_synced, krayin_lead_id)
+                    VALUES (?, ?, ?, ?,
+                        COALESCE((SELECT first_seen FROM consolidated_leads WHERE address_key = ?), ?),
+                        ?,
+                        ?,
+                        COALESCE((SELECT notified FROM consolidated_leads WHERE address_key = ?), 0),
+                        COALESCE((SELECT crm_synced FROM consolidated_leads WHERE address_key = ?), 0),
+                        COALESCE((SELECT krayin_lead_id FROM consolidated_leads WHERE address_key = ?), NULL)
+                    )
                 """, (
                     addr_key,
                     lead.get("address", ""),
@@ -264,10 +269,26 @@ class DeduplicationEngine:
                     datetime.utcnow().isoformat(),
                     datetime.utcnow().isoformat(),
                     json.dumps(lead, default=str),
+                    addr_key,
+                    addr_key,
+                    addr_key,
                 ))
                 conn.commit()
         except Exception as e:
             logger.debug(f"[Dedup] Persist consolidated error: {e}")
+
+    def mark_notified(self, address: str, city: str):
+        """Marca un lead consolidado como notificado por Telegram."""
+        addr_key = _address_key(address, city)
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    "UPDATE consolidated_leads SET notified=1 WHERE address_key=?",
+                    (addr_key,)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"[Dedup] Mark notified error: {e}")
 
     def _record_signal(self, address_key: str, agent_key: str, lead: dict):
         """Registra una señal de un agente para una propiedad."""

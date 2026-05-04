@@ -26,3 +26,4 @@ Thumbs.db
 # Scrapy
 data/.scrapy_httpcache/
 .scrapy/
+.venv/

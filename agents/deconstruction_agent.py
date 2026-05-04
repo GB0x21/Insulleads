@@ -26,16 +26,20 @@ Fuentes de pago:
 
 import os
 import re
+import time
 import logging
 import requests
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from bs4 import BeautifulSoup
 
 from agents.base import BaseAgent
 from utils.telegram import send_lead
 from utils.contacts_loader import load_all_contacts, lookup_contact
 from utils.lead_scoring import score_lead, format_score_line
 from utils.notifications import notify_multichannel
+from utils import cslb_bulk
+from utils.contact_enrichment import enrich_contact as _ext_enrich
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,51 @@ DECON_MONTHS       = int(os.getenv("DECON_MONTHS", "3"))
 PARALLEL_DECON     = int(os.getenv("PARALLEL_DECON", "6"))
 MIN_DECON_VALUE    = float(os.getenv("MIN_DECON_VALUE", "50000"))
 ATTOM_API_KEY      = os.getenv("ATTOM_API_KEY", "")
+
+_CSLB_URL = "https://www2.cslb.ca.gov/OnlineServices/CheckLicenseII/CheckLicense.aspx"
+_CSLB_HDR = {"User-Agent": "Mozilla/5.0 (compatible; LeadBot/1.0)"}
+
+
+def _cslb_scrape(license_number: str = None, company_name: str = None) -> dict:
+    """CSLB web scraper — by license number or company name."""
+    result = {}
+    try:
+        s = requests.Session()
+        s.headers.update(_CSLB_HDR)
+        r = s.get(_CSLB_URL, timeout=10)
+        r.raise_for_status()
+        hidden = {t.get("name", ""): t.get("value", "")
+                  for t in BeautifulSoup(r.text, "html.parser").find_all("input", {"type": "hidden"})}
+        if license_number and re.match(r"^\d{4,}$", str(license_number).strip()):
+            val, typ = str(license_number).strip(), "License"
+        elif company_name:
+            val, typ = company_name.strip()[:50], "Business"
+        else:
+            return result
+        payload = {
+            **hidden,
+            "ctl00$ContentPlaceHolder1$RadioButtonList1": typ,
+            "ctl00$ContentPlaceHolder1$TextBox1": val,
+            "ctl00$ContentPlaceHolder1$Button1": "Submit",
+        }
+        r2 = s.post(_CSLB_URL, data=payload, timeout=10)
+        r2.raise_for_status()
+        soup2 = BeautifulSoup(r2.text, "html.parser")
+        table = (soup2.find("table", {"id": re.compile(r"Grid|Results|License", re.I)})
+                 or soup2.find("table"))
+        if table:
+            for row in table.find_all("tr")[1:2]:
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) >= 3:
+                    result = {
+                        "phone":       cells[3] if len(cells) > 3 else "",
+                        "cslb_name":   cells[1] if len(cells) > 1 else "",
+                        "cslb_city":   cells[2] if len(cells) > 2 else "",
+                        "cslb_status": cells[4] if len(cells) > 4 else "",
+                    }
+    except Exception as e:
+        logger.debug(f"[CSLB] scrape error: {e}")
+    return result
 
 
 def _cutoff_iso() -> str:
@@ -646,7 +695,69 @@ class DeconstuctionAgent(BaseAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._contacts = load_all_contacts()
+        self._contacts   = load_all_contacts()
+        self._cslb_cache = {}
+
+    def _enrich_gc(self, lead: dict) -> dict:
+        """Three-tier enrichment: CSV → CSLB → Hunter/Apollo."""
+        contractor  = (lead.get("contractor") or "").strip()
+        lic_number  = (lead.get("lic_number") or lead.get("lic") or "").strip()
+        owner       = (lead.get("owner") or "").strip()
+        search_name = contractor or owner
+        cache_key   = lic_number or search_name
+        if not cache_key:
+            return {}
+        if cache_key in self._cslb_cache:
+            return self._cslb_cache[cache_key]
+
+        enrichment: dict = {}
+
+        # Tier 1: local CSV
+        if search_name:
+            match = lookup_contact(search_name, self._contacts)
+            if match:
+                if match.get("phone"):
+                    enrichment["contact_phone"] = match["phone"]
+                if match.get("email"):
+                    enrichment["contact_email"] = match["email"]
+                enrichment["contact_source"] = f"CSV ({match['source']})"
+
+        # Tier 2: CSLB bulk → scraper
+        if lic_number or search_name:
+            cslb: dict = {}
+            if lic_number:
+                cslb = cslb_bulk.lookup(license_number=lic_number)
+            if not cslb.get("phone") and contractor:
+                cslb = cslb_bulk.lookup(company_name=contractor)
+            if not cslb:
+                time.sleep(0.3)
+                if lic_number:
+                    cslb = _cslb_scrape(license_number=lic_number)
+                if not cslb.get("phone") and contractor:
+                    cslb = _cslb_scrape(company_name=contractor)
+                if not cslb.get("phone") and owner and owner != contractor:
+                    cslb = _cslb_scrape(company_name=owner)
+            if cslb.get("phone") and not enrichment.get("contact_phone"):
+                enrichment["contact_phone"] = cslb["phone"]
+                src = enrichment.get("contact_source")
+                enrichment["contact_source"] = f"{src} + CSLB" if src else "CSLB"
+
+        # Tier 3+4: Hunter.io / Apollo.io
+        if not enrichment.get("contact_email") and search_name:
+            try:
+                ext = _ext_enrich(company_name=search_name, person_name=contractor)
+                if ext.get("email"):
+                    enrichment["contact_email"] = ext["email"]
+                    if ext.get("phone") and not enrichment.get("contact_phone"):
+                        enrichment["contact_phone"] = ext["phone"]
+                    src = enrichment.get("contact_source")
+                    tag = ext.get("source", "Hunter/Apollo")
+                    enrichment["contact_source"] = f"{src} + {tag}" if src else tag
+            except Exception as e:
+                logger.debug(f"[Hunter/Apollo] error: {e}")
+
+        self._cslb_cache[cache_key] = enrichment
+        return enrichment
 
     def fetch_leads(self) -> list:
         leads = []
@@ -714,14 +825,11 @@ class DeconstuctionAgent(BaseAgent):
                             "_agent_key":    "deconstruction",
                         }
 
-                        # Enriquecer contacto
-                        contractor = lead["contractor"]
-                        if contractor:
-                            match = lookup_contact(contractor, self._contacts)
-                            if match:
-                                lead["contact_phone"]  = match.get("phone", "")
-                                lead["contact_email"]  = match.get("email", "")
-                                lead["contact_source"] = f"CSV ({match['source']})"
+                        # Enriquecer contacto — CSV → CSLB → Hunter/Apollo
+                        enrichment = self._enrich_gc(lead)
+                        for _k in ("contact_phone", "contact_email", "contact_source"):
+                            if enrichment.get(_k):
+                                lead[_k] = enrichment[_k]
 
                         # Lead scoring con boost por tipo
                         scoring = score_lead(lead)

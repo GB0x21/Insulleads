@@ -104,7 +104,9 @@ def _format_context_block(lead: Lead) -> str:
         proj_bits.append(f"${lead.project_value:,.0f}")
     proj = " · ".join(proj_bits)
 
-    lines: list[str] = ["──────────", f"🏗️ {where}" + (f" · {proj}" if proj else "")]
+    is_places = (lead.source.kind == "places")
+    addr_emoji = "🏢" if is_places else "🏗️"
+    lines: list[str] = ["──────────", f"{addr_emoji} {where}" + (f" · {proj}" if proj else "")]
 
     # Contact: company / name plus phone / email on the next line.
     company = lead.contact_company or lead.contact_name

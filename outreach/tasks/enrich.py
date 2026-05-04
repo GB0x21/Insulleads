@@ -30,6 +30,7 @@ try having been made.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
 from typing import Any
 
@@ -238,13 +239,29 @@ def handle(task: Task) -> None:
         if len(batch) >= ENRICH_BATCH_SIZE:
             break
 
-    enriched = sum(1 for lead in batch if enrich_one(lead, adapter))
+    # Dedup: same GC company appearing in multiple leads gets enriched once
+    # per batch — avoids burning LLM credits on duplicate contractor lookups.
+    seen_companies: set[str] = set()
+    deduped: list[Lead] = []
+    for lead in batch:
+        key = (lead.contact_company or "").strip().lower()
+        if key and key in seen_companies:
+            continue
+        if key:
+            seen_companies.add(key)
+        deduped.append(lead)
+
+    max_workers = int(settings.OUTREACH.get("ENRICH_WORKERS", 8))
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(deduped) or 1)) as pool:
+        futs = {pool.submit(enrich_one, lead, adapter): lead for lead in deduped}
+        enriched = sum(1 for f in as_completed(futs) if f.result())
 
     logger.info(
-        "[enrich] campaign=%s candidates=%d attempted=%d enriched=%d",
+        "[enrich] campaign=%s candidates=%d attempted=%d (deduped=%d) enriched=%d",
         campaign.name,
         len(candidates),
         len(batch),
+        len(deduped),
         enriched,
     )
     task.reschedule(minutes=interval)

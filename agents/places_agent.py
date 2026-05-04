@@ -13,6 +13,7 @@ clientes o referidos para servicios de insulación.
 
 import os
 import logging
+import time
 import requests
 from datetime import datetime
 
@@ -24,6 +25,22 @@ from utils.lead_scoring import score_lead, format_score_line
 logger = logging.getLogger(__name__)
 
 GOOGLE_PLACES_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
+_HTTP_RETRIES = int(os.getenv("HTTP_RETRIES", "2"))
+
+
+def _http_get(url: str, *, params: dict | None = None, timeout: int = 15) -> requests.Response | None:
+    """GET with exponential-backoff retry on Timeout / ConnectionError / 429."""
+    for attempt in range(_HTTP_RETRIES + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            if resp.status_code == 429 and attempt < _HTTP_RETRIES:
+                time.sleep(2 ** (attempt + 1))
+                continue
+            return resp
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if attempt < _HTTP_RETRIES:
+                time.sleep(2 ** attempt)
+    return None
 
 # Coordenadas centrales de ciudades Bay Area + radio de búsqueda
 _SEARCH_LOCATIONS = [
@@ -90,7 +107,7 @@ class PlacesAgent(BaseAgent):
     def _search_nearby(self, lat: float, lon: float,
                        radius: int, keyword: str) -> list:
         """Google Places Nearby Search."""
-        resp = requests.get(
+        resp = _http_get(
             "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
             params={
                 "location": f"{lat},{lon}",
@@ -99,9 +116,8 @@ class PlacesAgent(BaseAgent):
                 "type": "general_contractor",
                 "key": GOOGLE_PLACES_KEY,
             },
-            timeout=15,
         )
-        if resp.status_code != 200:
+        if resp is None or resp.status_code != 200:
             return []
 
         data = resp.json()
@@ -154,7 +170,7 @@ class PlacesAgent(BaseAgent):
     def _get_place_details(self, place_id: str) -> dict:
         """Google Places Details — obtiene teléfono y website."""
         try:
-            resp = requests.get(
+            resp = _http_get(
                 "https://maps.googleapis.com/maps/api/place/details/json",
                 params={
                     "place_id": place_id,
@@ -163,7 +179,7 @@ class PlacesAgent(BaseAgent):
                 },
                 timeout=10,
             )
-            if resp.status_code != 200:
+            if resp is None or resp.status_code != 200:
                 return {}
             data = resp.json()
             result = data.get("result", {})

@@ -25,16 +25,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE_TIMEOUT = int(os.getenv("SOURCE_TIMEOUT", "30"))
 
-# ── San Francisco: real inspection endpoint ─────────────────────
-SF_INSPECTION_ENDPOINT = {
-    "engine": "socrata",
-    "url": "https://data.sfgov.org/resource/biys-ruxt.json",
-    "permit_field": "permit_number",
-    "address_field": "block",
-    "date_field": "inspection_date",
-    "type_field": "inspection_type_description",
-    "status_field": "inspection_status",
-}
+# biys-ruxt fue retirado por SF DBI (404 desde 2026). SF usa estimación.
 
 # ── San Jose: CKAN inspection endpoint ──────────────────────────
 SJ_INSPECTION_ENDPOINT = {
@@ -273,13 +264,11 @@ for _county_name, _county_cfg in COUNTY_PERMIT_ENDPOINTS.items():
 # (no open-data Socrata/CKAN portal available)
 
 # ── Typical inspection timeline from permit issuance ────────────
+# Solo estimamos fases útiles para un subcontratista de insulación.
+# La estimación se suma a la fecha de emisión del permiso.
 PHASE_TIMELINE_DAYS = {
-    "foundation":  7,
-    "framing":     21,
-    "rough_mep":   28,
-    "insulation":  35,
-    "drywall":     42,
-    "final":       60,
+    "framing":   21,
+    "rough_mep": 35,
 }
 
 BEST_VISIT_HOURS = "7:00 AM - 10:00 AM"
@@ -302,16 +291,7 @@ def lookup_inspections(permit_id: str = None, address: str = None,
     if not city:
         return []
 
-    # 1. San Francisco — real inspection calendar
-    if city == "San Francisco":
-        try:
-            return _lookup_socrata_inspections(
-                SF_INSPECTION_ENDPOINT, permit_id, address
-            )
-        except Exception as e:
-            logger.debug(f"[InspectionSchedule] SF API error: {e}")
-
-    # 2. San Jose — CKAN
+    # 1. San Jose — CKAN
     if city == "San Jose":
         try:
             return _lookup_ckan(SJ_INSPECTION_ENDPOINT, permit_id, address)
@@ -361,31 +341,30 @@ def estimate_inspection_dates(issued_date: str, phase: str = None,
     now = datetime.utcnow()
     results = []
 
+    phase_labels = {
+        "framing":   "Estructura — Framing",
+        "rough_mep": "MEP Rough-In",
+    }
+
     for phase_name, days_offset in PHASE_TIMELINE_DAYS.items():
         est_date = base_date + timedelta(days=days_offset)
 
-        if est_date >= now - timedelta(days=3):
-            date_display = _format_date(est_date.isoformat())
-            day_of_week = _get_day_of_week(est_date.isoformat())
+        # Solo fechas estrictamente futuras (mínimo mañana)
+        if est_date < now + timedelta(days=1):
+            continue
 
-            phase_labels = {
-                "foundation": "Cimentacion",
-                "framing": "Estructura (Framing)",
-                "rough_mep": "MEP Rough-In",
-                "insulation": "Insulacion",
-                "drywall": "Drywall/Cierre",
-                "final": "Inspeccion Final",
-            }
+        date_display = _format_date(est_date.isoformat())
+        day_of_week = _get_day_of_week(est_date.isoformat())
 
-            results.append({
-                "date": est_date.isoformat(),
-                "date_display": date_display,
-                "day_of_week": day_of_week,
-                "type": phase_labels.get(phase_name, phase_name),
-                "status": "estimated",
-                "best_visit": f"{day_of_week} {date_display}, {BEST_VISIT_HOURS}",
-                "source": "estimated",
-            })
+        results.append({
+            "date": est_date.isoformat(),
+            "date_display": date_display,
+            "day_of_week": day_of_week,
+            "type": phase_labels.get(phase_name, phase_name),
+            "status": "estimated",
+            "best_visit": f"{day_of_week} {date_display}, {BEST_VISIT_HOURS}",
+            "source": "estimated",
+        })
 
     return results
 

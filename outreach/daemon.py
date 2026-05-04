@@ -56,20 +56,28 @@ def _handlers() -> dict[str, Callable[[Task], None]]:
 def ensure_periodic_tasks() -> None:
     """Make sure every active Source has a pending DISCOVER task,
     and every active Campaign has pending QUALIFY + OUTREACH tasks.
+
+    Uses a single batch query for all pending tasks instead of N×M
+    individual .exists() calls — avoids ~60 queries per daemon tick.
     """
     now = timezone.now()
 
-    for source in Source.objects.filter(enabled=True):
-        # Contract-bid sources use a different task type — the handler
-        # persists Contract rows and enqueues analysis, not just Leads.
+    sources = list(Source.objects.filter(enabled=True).select_related("campaign"))
+    campaigns = list(Campaign.objects.filter(is_active=True))
+
+    # One query — (type, source_id, campaign_id) tuples for all pending tasks.
+    pending: set[tuple] = set(
+        Task.objects.filter(status=Task.Status.PENDING)
+        .values_list("type", "source_id", "campaign_id")
+    )
+
+    for source in sources:
         task_type = (
             Task.Type.DISCOVER_CONTRACTS
             if source.kind == "contract_bids"
             else Task.Type.DISCOVER
         )
-        if not Task.objects.filter(
-            type=task_type, source=source, status=Task.Status.PENDING
-        ).exists():
+        if (task_type, source.pk, source.campaign_id) not in pending:
             Task.objects.create(
                 type=task_type,
                 campaign=source.campaign,
@@ -78,14 +86,12 @@ def ensure_periodic_tasks() -> None:
             )
             logger.info("[seed] %s queued for source=%s", task_type, source.key)
 
-    for campaign in Campaign.objects.filter(is_active=True):
+    for campaign in campaigns:
         periodic = [Task.Type.QUALIFY, Task.Type.OUTREACH, Task.Type.EMAIL_PROSPECT]
         if campaign.llm_enricher_enabled:
             periodic.append(Task.Type.ENRICH)
         for ttype in periodic:
-            if not Task.objects.filter(
-                type=ttype, campaign=campaign, status=Task.Status.PENDING
-            ).exists():
+            if (ttype, None, campaign.pk) not in pending:
                 Task.objects.create(
                     type=ttype, campaign=campaign, scheduled_at=now
                 )

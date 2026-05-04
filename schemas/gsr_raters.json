@@ -1,0 +1,8 @@
+{
+  "name": "GSRRaters",
+  "baseSelector": ".rater-card",
+  "fields": [
+    {"name": "business_name", "selector": ".rater-name",        "type": "text"},
+    {"name": "category",      "selector": ".rater-number span",  "type": "text"}
+  ]
+}
