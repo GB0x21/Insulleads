@@ -19,7 +19,7 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def init_db():
-    """Crea la tabla si no existe."""
+    """Crea todas las tablas del sistema si no existen."""
     with _get_conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sent_leads (
@@ -30,6 +30,27 @@ def init_db():
             )
         """)
         conn.commit()
+
+    # Fase 1: tablas de métricas
+    try:
+        from utils.agent_metrics import init_metrics_db
+        init_metrics_db()
+    except Exception as e:
+        logger.warning(f"[init_db] agent_metrics: {e}")
+
+    # Fase 2: tablas de memoria y outcomes
+    try:
+        from utils.memory import init_memory_db
+        init_memory_db()
+    except Exception as e:
+        logger.warning(f"[init_db] memory: {e}")
+
+    try:
+        from utils.lead_outcomes import init_outcomes_db
+        init_outcomes_db()
+    except Exception as e:
+        logger.warning(f"[init_db] lead_outcomes: {e}")
+
     logger.info(f"Base de datos inicializada: {DB_PATH}")
 
 
