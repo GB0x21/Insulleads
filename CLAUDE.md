@@ -102,14 +102,15 @@ NO es criterio de éxito:
 
 ### Fuentes de Datos
 
-- Los engines reconocidos son: `socrata`, `ckan`, `ckan_sql`, `seeclickfix`, `firecrawl`, `playwright`.
+- Los engines reconocidos son: `socrata`, `ckan`, `ckan_sql`, `seeclickfix`, `markitdown`, `firecrawl`, `playwright`.
 - Para añadir una ciudad SeeClickFix al `rodents_agent`, usa `_scf(city, slug)`.
 - Para añadir una ciudad nueva al `permits_agent`, replica la estructura del
   `field_map` más cercano — los campos varían por portal municipal.
 - Siempre pon `_skip_if_no_data: True` en fuentes experimentales.
+- Para documentos estáticos (PDF, Word, Excel, imágenes): usa `utils/markitdown_client.py` (más eficiente que scraping).
 - Para portales sin API estructurada: usa `utils/firecrawl_client.py` (scraping HTTP/JS).
 - Para portales con login, paginación interactiva o formularios: usa `utils/playwright_scraper.py`.
-- Preferencia de engine: `socrata` > `ckan` > `firecrawl` > `playwright` (de menor a mayor coste).
+- **Preferencia de engine (menor a mayor coste):** `socrata` > `ckan` > `markitdown` > `firecrawl` > `playwright`.
 
 ### Base de Datos
 
@@ -164,6 +165,10 @@ pytest outreach/tests/test_permit_filters.py -v  # tests específicos
 python manage.py runserver       # CRM en :8000
 python manage.py createsuperuser # Crear usuario admin
 python manage.py setup_crm       # Bootstrap campaña por defecto
+
+# MarkItDown — convertir documento a markdown
+markitdown file.pdf > file.md
+python -c "from utils.markitdown_client import is_available; print(is_available())"
 
 # Playwright — instalar browsers (una vez por entorno)
 playwright install chromium
