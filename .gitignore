@@ -9,6 +9,7 @@ data/leads.db
 data/*.db
 data/db.sqlite3
 staticfiles/
+.requirements-hash
 
 # IDE
 .vscode/
