@@ -191,9 +191,6 @@ def record_observation(
         )
         c.commit()
 
-    # Comprimir si el agente acumuló muchas observaciones
-    _maybe_compress(agent_key)
-
 
 def search_memories(
     query: str,
@@ -483,3 +480,18 @@ def get_agent_patterns(agent_key: str) -> dict:
         "total_found": total_found,
         "total_sent":  total_sent,
     }
+
+
+def needs_compression(agent_key: str) -> bool:
+    """Chequea si la compresión es necesaria (sin hacerla). Para usar en scheduler."""
+    with _conn() as c:
+        count = c.execute(
+            "SELECT COUNT(*) FROM memories WHERE agent_key=?",
+            (agent_key,),
+        ).fetchone()[0]
+    return count >= COMPRESS_TRIGGER
+
+
+def compress_memories(agent_key: str):
+    """Comprime el historial de un agente. Para ser llamado desde scheduler, no hot path."""
+    _maybe_compress(agent_key)
