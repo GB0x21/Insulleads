@@ -15,7 +15,10 @@ DB_PATH = os.getenv("DB_PATH", "data/leads.db")
 
 def _get_conn() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
 
 
 def init_db():
@@ -58,6 +61,9 @@ def init_db():
     except Exception as e:
         logger.warning(f"[init_db] lead_outcomes: {e}")
 
+    # Crear índices para hot paths
+    _create_indices()
+
     logger.info(f"Base de datos inicializada: {DB_PATH}")
 
 
@@ -88,3 +94,36 @@ def get_stats() -> dict:
             "SELECT agent_key, COUNT(*) FROM sent_leads GROUP BY agent_key"
         ).fetchall()
     return {row[0]: row[1] for row in rows}
+
+
+def _create_indices():
+    """Crea índices para optimizar hot paths."""
+    with _get_conn() as conn:
+        # sent_leads: búsquedas frecuentes por (agent_key, lead_id)
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sent_leads_agent_key "
+                "ON sent_leads(agent_key)"
+            )
+        except Exception as e:
+            logger.debug(f"Index sent_leads(agent_key) already exists: {e}")
+
+        # memories: búsquedas por agent_key + ordering por created_at (hot path de compression)
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_agent_created "
+                "ON memories(agent_key, created_at DESC)"
+            )
+        except Exception as e:
+            logger.debug(f"Index memories(agent_key, created_at) already exists: {e}")
+
+        # consolidated_leads: dedup lookups y crm_sync
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_consolidated_address_key "
+                "ON consolidated_leads(address_key, agent_key)"
+            )
+        except Exception as e:
+            logger.debug(f"Index consolidated_leads already exists: {e}")
+
+        conn.commit()

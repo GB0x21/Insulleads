@@ -51,53 +51,61 @@ def _esc(text: str) -> str:
     return text
 
 
-def send_message(text: str, max_retries: int = 4) -> bool:
+def send_message(text: str, max_retries: int = 2) -> bool:
+    """
+    Envía mensaje a Telegram sin bloquear threads del scheduler.
+
+    IMPORTANTE: Este código corre dentro del ThreadPoolExecutor.
+    NO usar time.sleep() en retries — causa deadlock del scheduler.
+
+    Cambio v8: Eliminar retries de 429 (bloquea el pool), solo fallar y loguear.
+    """
     _wait_for_slot()
     url = TELEGRAM_API.format(token=_token())
-    for attempt in range(max_retries):
-        try:
-            resp = requests.post(
+    try:
+        resp = requests.post(
+            url,
+            json={
+                "chat_id":                  _chat_id(),
+                "text":                     text[:4096],
+                "parse_mode":               "Markdown",
+                "disable_web_page_preview": True,
+            },
+            timeout=5,  # Timeout bajo para no bloquear threads
+        )
+        if resp.status_code == 429:
+            retry_after = resp.json().get("parameters", {}).get("retry_after", 30)
+            logger.warning(
+                f"Telegram rate limit (429) — próximo intento en {retry_after}s. "
+                f"Aumentar TELEGRAM_MAX_MSG_MIN en .env si es frecuente."
+            )
+            return False
+        if resp.status_code == 400:
+            # Markdown roto — reintentar sin parse_mode
+            resp2 = requests.post(
                 url,
                 json={
                     "chat_id":                  _chat_id(),
                     "text":                     text[:4096],
-                    "parse_mode":               "Markdown",
                     "disable_web_page_preview": True,
                 },
-                timeout=15,
+                timeout=5,
             )
-            if resp.status_code == 429:
-                retry_after = resp.json().get("parameters", {}).get("retry_after", 30)
-                logger.warning(f"Telegram 429 — esperando {retry_after}s")
-                time.sleep(retry_after + 2)
-                _wait_for_slot()
-                continue
-            if resp.status_code == 400:
-                # Markdown roto — reintentar sin parse_mode
-                resp2 = requests.post(
-                    url,
-                    json={
-                        "chat_id":                  _chat_id(),
-                        "text":                     text[:4096],
-                        "disable_web_page_preview": True,
-                    },
-                    timeout=15,
-                )
-                if resp2.status_code == 200:
-                    return True
-                logger.error(f"Telegram 400 even without Markdown: {resp2.text[:200]}")
-                return False
-            resp.raise_for_status()
-            return True
-        except requests.exceptions.HTTPError as e:
-            if attempt < max_retries - 1:
-                time.sleep(5 * (attempt + 1))
-            else:
-                logger.error(f"Telegram send error: {e}")
-        except Exception as e:
-            logger.error(f"Telegram send error: {e}")
+            if resp2.status_code == 200:
+                return True
+            logger.error(f"Telegram 400 even without Markdown: {resp2.text[:200]}")
             return False
-    return False
+        resp.raise_for_status()
+        return True
+    except requests.exceptions.Timeout:
+        logger.warning("Telegram timeout (5s) — descartando mensaje para no bloquear scheduler")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Telegram request error: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Telegram send error: {e}")
+        return False
 
 
 def send_lead(agent_name, emoji, title, fields, url=None, cta=None) -> bool:

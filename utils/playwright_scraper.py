@@ -2,6 +2,7 @@
 utils/playwright_scraper.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Playwright browser automation para portales JS-rendered.
+Usa pool de browsers para reutilizar instancias en lugar de crear una nueva por request.
 
 Complementa firecrawl_client para casos que requieren:
   - Login / sesión autenticada
@@ -29,6 +30,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,7 @@ _env_int = lambda k, d: int(os.getenv(k, str(d)).split("#")[0].strip()) if \
 PLAYWRIGHT_TIMEOUT_MS = _env_int("PLAYWRIGHT_TIMEOUT_MS", 30000)
 PLAYWRIGHT_HEADLESS   = os.getenv("PLAYWRIGHT_HEADLESS", "true").split("#")[0].strip().lower() \
                         not in ("false", "0")
+PLAYWRIGHT_POOL_SIZE  = _env_int("PLAYWRIGHT_POOL_SIZE", 2)
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
@@ -59,6 +63,71 @@ def _check():
         )
 
 
+class BrowserPool:
+    """Pool de browsers Playwright reutilizables para evitar crear uno por request."""
+
+    def __init__(self, size: int = 2):
+        self.size = size
+        self._pw = None
+        self._browsers: list = []
+        self._lock = threading.Lock()
+        self._available = threading.Semaphore(0)
+
+    def _init_pool(self):
+        """Lazy init del pool en el primer uso."""
+        if self._pw is not None:
+            return
+        self._pw = sync_playwright().start()
+        for _ in range(self.size):
+            browser = self._pw.chromium.launch(headless=PLAYWRIGHT_HEADLESS)
+            self._browsers.append(browser)
+            self._available.release()
+
+    @contextmanager
+    def acquire(self):
+        """Context manager que devuelve una página lista para usar."""
+        _check()
+        self._init_pool()
+        self._available.acquire()  # Esperar si todas están ocupadas
+        with self._lock:
+            browser = self._browsers.pop(0)
+        try:
+            page = browser.new_page()
+            yield page
+            page.close()
+        finally:
+            with self._lock:
+                self._browsers.append(browser)
+            self._available.release()
+
+    def close(self):
+        """Cierra todos los browsers del pool."""
+        with self._lock:
+            for browser in self._browsers:
+                try:
+                    browser.close()
+                except Exception as e:
+                    logger.debug(f"Error closing browser: {e}")
+            self._browsers.clear()
+        if self._pw:
+            self._pw.stop()
+            self._pw = None
+
+
+_browser_pool: Optional[BrowserPool] = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool() -> BrowserPool:
+    """Singleton pool (lazy init)."""
+    global _browser_pool
+    if _browser_pool is None:
+        with _pool_lock:
+            if _browser_pool is None:
+                _browser_pool = BrowserPool(size=PLAYWRIGHT_POOL_SIZE)
+    return _browser_pool
+
+
 def scrape_page(
     url: str,
     wait_selector: Optional[str] = None,
@@ -77,22 +146,17 @@ def scrape_page(
     Returns:
         HTML string or JS result string, empty string on error.
     """
-    _check()
     timeout = timeout_ms or PLAYWRIGHT_TIMEOUT_MS
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=PLAYWRIGHT_HEADLESS)
-            page    = browser.new_page()
+        pool = _get_pool()
+        with pool.acquire() as page:
             page.goto(url, timeout=timeout)
             if wait_selector:
                 page.wait_for_selector(wait_selector, timeout=timeout)
             if js_script:
                 result = page.evaluate(js_script)
-                browser.close()
                 return str(result)
-            content = page.content()
-            browser.close()
-            return content
+            return page.content()
     except Exception as e:
         logger.warning(f"[playwright] scrape_page({url!r}) failed: {e}")
         return ""
@@ -117,19 +181,16 @@ def scrape_table(
     Returns:
         List of row dicts, empty list on error.
     """
-    _check()
     timeout = timeout_ms or PLAYWRIGHT_TIMEOUT_MS
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=PLAYWRIGHT_HEADLESS)
-            page    = browser.new_page()
+        pool = _get_pool()
+        with pool.acquire() as page:
             page.goto(url, timeout=timeout)
             page.wait_for_selector(wait_selector or table_selector, timeout=timeout)
 
             table   = page.locator(table_selector).first
             headers = [h.inner_text().strip() for h in table.locator("th").all()]
             if not headers:
-                browser.close()
                 return []
 
             rows_out = []
@@ -142,8 +203,6 @@ def scrape_table(
                     for i, cell in enumerate(cells)
                 }
                 rows_out.append(row_dict)
-
-            browser.close()
             return rows_out
     except Exception as e:
         logger.warning(f"[playwright] scrape_table({url!r}) failed: {e}")
@@ -175,13 +234,11 @@ def scrape_paginated(
     Returns:
         Accumulated list of all extracted rows.
     """
-    _check()
     timeout = timeout_ms or PLAYWRIGHT_TIMEOUT_MS
     results: list[dict] = []
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=PLAYWRIGHT_HEADLESS)
-            page    = browser.new_page()
+        pool = _get_pool()
+        with pool.acquire() as page:
             page.goto(url, timeout=timeout)
             for _ in range(max_pages):
                 page.wait_for_selector(row_selector, timeout=timeout)
@@ -191,7 +248,6 @@ def scrape_paginated(
                     break
                 next_btn.click()
                 page.wait_for_load_state("networkidle", timeout=timeout)
-            browser.close()
     except Exception as e:
         logger.warning(f"[playwright] scrape_paginated({url!r}) failed: {e}")
     return results
@@ -218,12 +274,10 @@ def fill_and_submit(
     Returns:
         HTML of the results page, empty string on error.
     """
-    _check()
     timeout = timeout_ms or PLAYWRIGHT_TIMEOUT_MS
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=PLAYWRIGHT_HEADLESS)
-            page    = browser.new_page()
+        pool = _get_pool()
+        with pool.acquire() as page:
             page.goto(url, timeout=timeout)
             for selector, value in fields.items():
                 page.fill(selector, value)
@@ -232,9 +286,7 @@ def fill_and_submit(
                 page.wait_for_selector(wait_selector, timeout=timeout)
             else:
                 page.wait_for_load_state("networkidle", timeout=timeout)
-            content = page.content()
-            browser.close()
-            return content
+            return page.content()
     except Exception as e:
         logger.warning(f"[playwright] fill_and_submit({url!r}) failed: {e}")
         return ""

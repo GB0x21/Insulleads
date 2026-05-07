@@ -27,6 +27,7 @@ ROOT CAUSE ANALYSIS v8:
 import os
 import re
 import time
+import random
 import logging
 import requests
 from datetime import datetime, timedelta
@@ -848,18 +849,19 @@ def _cslb_lookup(license_number: str = None, company_name: str = None) -> dict:
 # ── Parsers ────────────────────────────────────────────────────────
 
 def _http_get(url: str, *, params=None, headers=None, timeout: int = 30) -> requests.Response:
-    """requests.get with exponential-backoff retry on transient failures.
+    """requests.get with exponential-backoff retry + jitter on transient failures.
 
     Retries on: Timeout, ConnectionError, and HTTP 429 (rate limit).
     All other HTTP errors propagate immediately.
+    Backoff: 2^attempt + random(0,1) to prevent thundering herd.
     """
     last_exc: Exception = RuntimeError("no attempts made")
     for attempt in range(HTTP_RETRIES + 1):
         try:
             resp = requests.get(url, params=params, headers=headers, timeout=timeout)
             if resp.status_code == 429:
-                wait = 2 ** (attempt + 1)
-                logger.debug("[http] 429 from %s — waiting %ds (attempt %d)", url, wait, attempt + 1)
+                wait = 2 ** (attempt + 1) + random.uniform(0, 1)
+                logger.debug("[http] 429 from %s — waiting %.2fs (attempt %d)", url, wait, attempt + 1)
                 if attempt < HTTP_RETRIES:
                     time.sleep(wait)
                     continue
@@ -869,8 +871,8 @@ def _http_get(url: str, *, params=None, headers=None, timeout: int = 30) -> requ
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             last_exc = exc
             if attempt < HTTP_RETRIES:
-                wait = 2 ** attempt
-                logger.debug("[http] %s on %s — retrying in %ds", type(exc).__name__, url, wait)
+                wait = 2 ** attempt + random.uniform(0, 1)
+                logger.debug("[http] %s on %s — retrying in %.2fs", type(exc).__name__, url, wait)
                 time.sleep(wait)
     raise last_exc
 
