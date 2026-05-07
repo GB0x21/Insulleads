@@ -57,6 +57,13 @@ LEAD_SOURCES = [
     "Google Places",
     "Yelp",
     "Demolicion",
+    "Accela / IVARA Permisos",
+    "Cal Fire DINS",
+    "HUD Multifamiliar",
+    "Shovels.ai Permisos",
+    "Anomalia Termica",
+    "Email Prospect",
+    "Web Crawler",
 ]
 
 # Map agent_key → source name for sync bridge
@@ -71,6 +78,13 @@ AGENT_TO_SOURCE = {
     "places":         "Google Places",
     "yelp":           "Yelp",
     "deconstruction": "Demolicion",
+    "accela":         "Accela / IVARA Permisos",
+    "dins":           "Cal Fire DINS",
+    "hud_multifamily": "HUD Multifamiliar",
+    "shovels":        "Shovels.ai Permisos",
+    "thermal":        "Anomalia Termica",
+    "email_prospect": "Email Prospect",
+    "web_crawler":    "Web Crawler",
 }
 
 # ── Lead types ──────────────────────────────────────────────────

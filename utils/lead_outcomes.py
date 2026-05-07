@@ -34,10 +34,25 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
 
-# Mínimo de outcomes para que la memoria sea estadísticamente significativa
-MIN_OUTCOMES_FOR_SIGNAL = int(os.getenv("MIN_OUTCOMES_FOR_SIGNAL", "5"))
-# Umbral de similitud coseno para considerar leads "similares"
-SIMILARITY_THRESHOLD    = float(os.getenv("OUTCOME_SIMILARITY_THRESHOLD", "0.6"))
+
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(key: str, default: float) -> float:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+MIN_OUTCOMES_FOR_SIGNAL = _env_int("MIN_OUTCOMES_FOR_SIGNAL", 5)
+SIMILARITY_THRESHOLD    = _env_float("OUTCOME_SIMILARITY_THRESHOLD", 0.6)
 # Máximo bonus/penalty de memoria en puntos (de 0-100)
 MAX_MEMORY_BONUS        = int(os.getenv("MAX_MEMORY_BONUS", "15"))
 MAX_MEMORY_PENALTY      = int(os.getenv("MAX_MEMORY_PENALTY", "10"))
