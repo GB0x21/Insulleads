@@ -37,12 +37,18 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 CATALOG_URL = os.getenv(
     "SOCRATA_CATALOG_URL",
     "http://api.us.socrata.com/api/catalog/v1",
 )
-_TIMEOUT = int(os.getenv("SOCRATA_DISCOVERY_TIMEOUT_S", "30"))
+_TIMEOUT = _env_int("SOCRATA_DISCOVERY_TIMEOUT_S", 30)
 
 # Keywords that match permits / construction datasets (Socrata search
 # is OR-of-tokens). We bias toward `building permits` to keep the

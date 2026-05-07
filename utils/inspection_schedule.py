@@ -23,7 +23,14 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-SOURCE_TIMEOUT = int(os.getenv("SOURCE_TIMEOUT", "30"))
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+SOURCE_TIMEOUT = _env_int("SOURCE_TIMEOUT", 30)
 
 # biys-ruxt fue retirado por SF DBI (404 desde 2026). SF usa estimación.
 
