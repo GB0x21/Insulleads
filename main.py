@@ -86,8 +86,9 @@ def _try_register_optional():
                 "class": DINSAgent, "env_key": "AGENT_DINS",
                 "interval_key": "INTERVAL_DINS", "default_interval": 1440,
             }
-        except ImportError:
-            logger.warning("[dins] No se pudo importar DINSAgent")
+            logger.info("[dins] Agente registrado (Cal Fire post-wildfire rebuilds)")
+        except Exception as e:
+            logger.warning(f"[dins] No se pudo importar DINSAgent: {e}")
 
     if os.getenv("AGENT_HUD_MULTIFAMILY", "false").lower() in ("true", "1", "yes"):
         try:
@@ -96,8 +97,9 @@ def _try_register_optional():
                 "class": HUDMultifamilyAgent, "env_key": "AGENT_HUD_MULTIFAMILY",
                 "interval_key": "INTERVAL_HUD_MULTIFAMILY", "default_interval": 1440,
             }
-        except ImportError:
-            logger.warning("[hud] No se pudo importar HUDMultifamilyAgent")
+            logger.info("[hud] Agente registrado (HUD/LIHTC multifamily rehab)")
+        except Exception as e:
+            logger.warning(f"[hud] No se pudo importar HUDMultifamilyAgent: {e}")
 
     if os.getenv("AGENT_SHOVELS", "false").lower() in ("true", "1", "yes"):
         try:
@@ -106,8 +108,9 @@ def _try_register_optional():
                 "class": ShovelsAgent, "env_key": "AGENT_SHOVELS",
                 "interval_key": "INTERVAL_SHOVELS", "default_interval": 1440,
             }
-        except ImportError:
-            logger.warning("[shovels] No se pudo importar ShovelsAgent")
+            logger.info("[shovels] Agente registrado (Shovels.ai national permits)")
+        except Exception as e:
+            logger.warning(f"[shovels] No se pudo importar ShovelsAgent: {e}")
 
 
 # ── Singletons de agentes ──────────────────────────────────────────────────────
