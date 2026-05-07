@@ -297,6 +297,52 @@ class DeduplicationEngine:
         except Exception as e:
             logger.debug(f"[Dedup] Mark notified error: {e}")
 
+    def get_backlog_leads(self, agent_key: str | None = None, limit: int = 500) -> list[dict]:
+        """
+        Retorna leads de consolidated_leads con notified=0.
+
+        Si agent_key se especifica, filtra por leads donde ese agente
+        aparece en agent_sources. Útil para que cada agente drene su
+        propio backlog sin pisarse con otros agentes.
+        """
+        import json
+        try:
+            with self._get_conn() as conn:
+                if agent_key:
+                    rows = conn.execute(
+                        """SELECT address_key, address, city, agent_sources, lead_data
+                           FROM consolidated_leads
+                           WHERE notified=0
+                             AND (',' || agent_sources || ',') LIKE ?
+                           ORDER BY last_updated DESC LIMIT ?""",
+                        (f"%,{agent_key},%", limit),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """SELECT address_key, address, city, agent_sources, lead_data
+                           FROM consolidated_leads
+                           WHERE notified=0
+                           ORDER BY last_updated DESC LIMIT ?""",
+                        (limit,),
+                    ).fetchall()
+        except Exception as e:
+            logger.debug(f"[Dedup] get_backlog_leads error: {e}")
+            return []
+
+        leads = []
+        for addr_key, address, city, sources, lead_data_json in rows:
+            try:
+                lead = json.loads(lead_data_json)
+                # Asegurar campos mínimos por si lead_data está incompleto
+                lead.setdefault("address", address)
+                lead.setdefault("city", city)
+                lead["_agent_sources"] = sources
+                lead["_address_key"] = addr_key
+                leads.append(lead)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return leads
+
     def _record_signal(self, address_key: str, agent_key: str, lead: dict):
         """Registra una señal de un agente para una propiedad."""
         import json

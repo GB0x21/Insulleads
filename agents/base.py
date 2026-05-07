@@ -67,6 +67,33 @@ class BaseAgent(ABC):
     def notify(self, lead: dict):
         ...
 
+    def flush_backlog(self, limit: int = 500) -> int:
+        """
+        Drena el backlog histórico de consolidated_leads (notified=0)
+        asociados a este agente.
+
+        Útil después de cambiar filtros (e.g., _has_contact más laxo)
+        que ahora permite leads que antes quedaron atascados.
+
+        Reutiliza send_batch para mantener consistencia: filtro de
+        contacto + scoring + multi-canal + memoria.
+        """
+        try:
+            dedup = get_dedup_engine()
+            backlog = dedup.get_backlog_leads(agent_key=self.agent_key, limit=limit)
+        except Exception as e:
+            logger.error(f"[{self.agent_key}] flush_backlog: error cargando backlog: {e}")
+            return 0
+
+        if not backlog:
+            logger.info(f"[{self.agent_key}] Backlog vacío")
+            return 0
+
+        logger.info(
+            f"[{self.agent_key}] Reprocesando {len(backlog)} leads del backlog (notified=0)"
+        )
+        return self.send_batch(backlog)
+
     def get_memory_context(self, query: str = "") -> str:
         """
         Retorna contexto de memoria relevante para este agente.
