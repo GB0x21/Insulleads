@@ -54,8 +54,8 @@ def _env_float(key: str, default: float) -> float:
 MIN_OUTCOMES_FOR_SIGNAL = _env_int("MIN_OUTCOMES_FOR_SIGNAL", 5)
 SIMILARITY_THRESHOLD    = _env_float("OUTCOME_SIMILARITY_THRESHOLD", 0.6)
 # Máximo bonus/penalty de memoria en puntos (de 0-100)
-MAX_MEMORY_BONUS        = int(os.getenv("MAX_MEMORY_BONUS", "15"))
-MAX_MEMORY_PENALTY      = int(os.getenv("MAX_MEMORY_PENALTY", "10"))
+MAX_MEMORY_BONUS        = _env_int("MAX_MEMORY_BONUS", 15)
+MAX_MEMORY_PENALTY      = _env_int("MAX_MEMORY_PENALTY", 10)
 
 OUTCOME_WON     = "won"
 OUTCOME_LOST    = "lost"
