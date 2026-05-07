@@ -327,6 +327,60 @@ def cmd_flush_backlog(agent_key: str | None = None):
     logger.info(f"[flush] TOTAL: {total_sent} leads drenados del backlog")
 
 
+def cmd_diagnose_crm():
+    """Diagnóstico completo del estado de la integración con Krayin CRM."""
+    print("\n══════════════════════════════════════════════════")
+    print("  CRM Diagnostic — Insulleads ↔ Krayin")
+    print("══════════════════════════════════════════════════\n")
+
+    crm = CRMSync()
+    report = crm.diagnose()
+
+    def status(ok: bool) -> str:
+        return "✅" if ok else "❌"
+
+    print(f"  {status(report['krayin_env_ok'])} Krayin .env legible")
+    print(f"     Path: {report['krayin_env_path']}")
+    print(f"  {status(report['mysql_ok'])} MySQL accesible")
+    print(f"  {status(report['pipeline_ok'])} Pipeline default configurado"
+          + (f" (id={report['pipeline_id']})" if report['pipeline_id'] else ""))
+    print(f"  {'✅' if report['sources_count'] > 0 else '⚠️ '} Lead sources: {report['sources_count']}")
+    print()
+    print(f"  📦 Leads sincronizados:  {report['synced_count']:,}")
+    print(f"  ⏳ Leads pendientes:     {report['pending_count']:,}")
+    print()
+
+    if report["errors"]:
+        print("  ⚠️  Issues detectados:")
+        for err in report["errors"]:
+            print(f"     • {err}")
+        print()
+
+    overall_ok = (
+        report["krayin_env_ok"] and report["mysql_ok"]
+        and (report["pipeline_ok"] or report["pending_count"] == 0)
+    )
+    if overall_ok:
+        if report["pending_count"] > 0:
+            print(f"  ➡️  Listo para sincronizar. Ejecuta: python main.py --sync-crm")
+        else:
+            print(f"  ✅ Todo OK — nada pendiente que sincronizar.")
+    else:
+        print(f"  🔧 Corrige los issues anteriores antes de sincronizar.")
+    print()
+    sys.exit(0 if overall_ok else 1)
+
+
+def cmd_sync_crm():
+    """Ejecuta sync manual del CRM con feedback detallado."""
+    crm = CRMSync()
+    if not crm.is_configured():
+        logger.error("[sync-crm] CRM no configurado. Ejecuta: python main.py --diagnose-crm")
+        sys.exit(1)
+    count = crm.sync()
+    logger.info(f"[sync-crm] {count} leads sincronizados con Krayin")
+
+
 def cmd_start():
     """
     Inicia el scheduler Hermes-style.
@@ -443,6 +497,10 @@ if __name__ == "__main__":
     parser.add_argument("--run",    metavar="AGENT",     help="Ejecuta un agente manualmente")
     parser.add_argument("--flush-backlog", nargs="?", const="__ALL__", metavar="AGENT",
                         help="Reprocesa leads atascados en consolidated_leads (todos los agentes si no se especifica)")
+    parser.add_argument("--diagnose-crm", action="store_true",
+                        help="Diagnóstico de la integración con Krayin CRM")
+    parser.add_argument("--sync-crm", action="store_true",
+                        help="Ejecuta sync manual de leads pendientes a Krayin CRM")
     args = parser.parse_args()
 
     if args.test:
@@ -464,5 +522,11 @@ if __name__ == "__main__":
         load_all_contacts()
         target = None if args.flush_backlog == "__ALL__" else args.flush_backlog
         cmd_flush_backlog(target)
+    elif args.diagnose_crm:
+        init_db()
+        cmd_diagnose_crm()
+    elif args.sync_crm:
+        init_db()
+        cmd_sync_crm()
     else:
         cmd_start()
