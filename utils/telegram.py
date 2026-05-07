@@ -16,9 +16,17 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API        = "https://api.telegram.org/bot{token}/sendMessage"
-_MAX_MSG_PER_MINUTE = int(os.getenv("TELEGRAM_MAX_MSG_MIN", "20"))
+
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+_MAX_MSG_PER_MINUTE = _env_int("TELEGRAM_MAX_MSG_MIN", 20)
 _MIN_INTERVAL       = 60.0 / _MAX_MSG_PER_MINUTE
-MAX_BURST           = int(os.getenv("TELEGRAM_MAX_BURST", "10"))
+MAX_BURST           = _env_int("TELEGRAM_MAX_BURST", 10)
 
 _rate_lock      = threading.Lock()
 _last_send_time = 0.0

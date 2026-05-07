@@ -25,10 +25,17 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
 # Configuración
-HOT_ZONE_THRESHOLD  = int(os.getenv("HOT_ZONE_THRESHOLD", "3"))   # Min leads para hot zone
-HOT_ZONE_RADIUS_M   = int(os.getenv("HOT_ZONE_RADIUS_M", "500"))  # Radio en metros
-HOT_ZONE_WINDOW_HRS = int(os.getenv("HOT_ZONE_WINDOW_HRS", "168")) # Ventana (default: 7 días)
+HOT_ZONE_THRESHOLD  = _env_int("HOT_ZONE_THRESHOLD", 3)   # Min leads para hot zone
+HOT_ZONE_RADIUS_M   = _env_int("HOT_ZONE_RADIUS_M", 500)  # Radio en metros
+HOT_ZONE_WINDOW_HRS = _env_int("HOT_ZONE_WINDOW_HRS", 168) # Ventana (default: 7 días)
 
 # Tamaño de celda en grados (~200m a latitud Bay Area)
 _CELL_SIZE_LAT = 0.0018  # ~200m

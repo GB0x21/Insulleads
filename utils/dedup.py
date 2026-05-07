@@ -33,8 +33,15 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
 # Ventana de dedup: leads de la misma propiedad dentro de N días se consolidan
-DEDUP_WINDOW_DAYS = int(os.getenv("DEDUP_WINDOW_DAYS", "30"))
+DEDUP_WINDOW_DAYS = _env_int("DEDUP_WINDOW_DAYS", 30)
 
 
 # ── Normalización de direcciones ─────────────────────────────────────

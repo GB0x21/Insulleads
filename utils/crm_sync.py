@@ -37,9 +37,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key, str(default)).split("#")[0].strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
 # ── Configuration ───────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "data/leads.db")
-BATCH_SIZE = int(os.getenv("CRM_SYNC_BATCH", "600"))
+BATCH_SIZE = _env_int("CRM_SYNC_BATCH", 600)
 
 # Krayin CRM directory (for reading MySQL credentials from its .env)
 CRM_DIR = os.getenv("CRM_DIR", "/home/insulleads/krayin-crm")
