@@ -35,11 +35,23 @@ logger = logging.getLogger(__name__)
 
 
 def _has_contact(lead: dict) -> bool:
-    return bool(
+    """
+    Un lead tiene contacto si:
+    - Tiene tel/email DIRECTO (contacto de persona), O
+    - Tiene dirección + ciudad (propiedad = contacto implícito para prospección)
+
+    Muchos leads son sobre propiedades (permits, solar, energy, rodents).
+    La dirección es el "contacto" para enviar prospectores/contratistas.
+    """
+    has_direct_contact = bool(
         lead.get("contact_phone")
         or lead.get("phone")
         or lead.get("contact_email")
     )
+    has_property_address = bool(
+        lead.get("address") and lead.get("city")
+    )
+    return has_direct_contact or has_property_address
 
 
 class BaseAgent(ABC):
