@@ -42,6 +42,7 @@ from utils.telegram import send_message
 from utils.db import init_db, get_stats
 from utils.contacts_loader import load_all_contacts
 from utils.memory import compress_memories, needs_compression
+from utils.crm_sync import CRMSync
 from utils.agent_metrics import (
     init_metrics_db,
     is_circuit_open,
@@ -168,6 +169,23 @@ class MemoryCompressionJob:
         return max(0.0, self.next_run_at - time.monotonic())
 
 
+class CRMSyncJob:
+    """Job periódico para sincronizar leads con Krayin CRM."""
+
+    def __init__(self, interval_min: int = 10):
+        self.interval_min = interval_min
+        self.next_run_at = time.monotonic()  # Ejecutar apenas arranque
+
+    def is_due(self) -> bool:
+        return time.monotonic() >= self.next_run_at
+
+    def reschedule(self):
+        self.next_run_at = time.monotonic() + (self.interval_min * 60)
+
+    def seconds_until_next(self) -> float:
+        return max(0.0, self.next_run_at - time.monotonic())
+
+
 def run_agent(agent_key: str) -> tuple[int, int]:
     """
     Ejecuta un ciclo del agente.
@@ -207,6 +225,19 @@ def _compress_memories_job(compression_job: MemoryCompressionJob):
                 compress_memories(agent_key)
     except Exception as e:
         logger.error(f"[memory] Compression job failed: {e}")
+
+
+def _sync_crm_job(crm_sync_job: CRMSyncJob):
+    """Job que sincroniza leads con Krayin CRM."""
+    try:
+        crm = CRMSync()
+        if crm.is_configured():
+            count = crm.sync()
+            logger.info(f"[crm_sync] {count} leads sincronizados con Krayin")
+        else:
+            logger.debug("[crm_sync] CRM no configurado, saltando sync")
+    except Exception as e:
+        logger.error(f"[crm_sync] Sync failed: {e}")
 
 
 def _send_health_report():
@@ -306,6 +337,9 @@ def cmd_start():
     # Job periódico para compresión de memoria (cada hora, fuera del hot path)
     compression_job = MemoryCompressionJob(enabled_agents, interval_min=60)
 
+    # Job periódico para sincronizar leads con Krayin CRM (cada 10 min)
+    crm_sync_job = CRMSyncJob(interval_min=10)
+
     logger.info(
         f"🚀 Scheduler Hermes-style iniciado con {len(schedules)} agente(s): "
         + ", ".join(s.key for s in schedules)
@@ -341,6 +375,11 @@ def cmd_start():
             if compression_job.is_due():
                 executor.submit(_compress_memories_job, compression_job)
                 compression_job.reschedule()
+
+            # CRM sync job (cada 10 min, background)
+            if crm_sync_job.is_due():
+                executor.submit(_sync_crm_job, crm_sync_job)
+                crm_sync_job.reschedule()
 
             # Health report periódico
             if time.monotonic() - last_health_report >= health_interval_s:

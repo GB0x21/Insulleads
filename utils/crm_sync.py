@@ -213,6 +213,10 @@ class CRMSync:
         self.pipeline_id = None
         self.type_ids = {}
 
+    def is_configured(self) -> bool:
+        """Chequea si el CRM está configurado (MySQL + credenciales)."""
+        return bool(self.creds.get("host") and self.creds.get("user"))
+
     def _test_mysql(self) -> bool:
         """Test MySQL connectivity."""
         rows = _mysql_query(self.creds, "SELECT 1")
@@ -806,12 +810,12 @@ class CRMSync:
                 f"VALUES ({tag_id}, {lead_id}, 'Webkul\\\\Lead\\\\Models\\\\Lead')"
             )
 
-    def sync(self):
-        """Main sync loop — read unsynced leads and push to CRM."""
+    def sync(self) -> int:
+        """Main sync loop — read unsynced leads and push to CRM. Returns count of synced leads."""
         logger.info("Iniciando sincronizacion...")
 
         if not self._bootstrap():
-            return
+            return 0
 
         # Read unsynced leads from SQLite
         try:
@@ -843,7 +847,7 @@ class CRMSync:
         if not rows:
             logger.info("No hay leads nuevos para sincronizar")
             conn.close()
-            return
+            return 0
 
         logger.info(f"Sincronizando {len(rows)} leads...")
 
@@ -881,6 +885,7 @@ class CRMSync:
         conn.close()
 
         logger.info(f"Sincronizacion completa: {synced} OK, {failed} fallidos")
+        return synced
 
 
 def main():
