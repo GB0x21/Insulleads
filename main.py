@@ -77,40 +77,47 @@ AGENT_REGISTRY: dict[str, dict] = {
 }
 
 # ── Opt-in agents (importación condicional) ────────────────────────────────────
+# (env_key, agent_key, module, class_name, interval_key, default_interval, descripcion)
+_OPTIONAL_AGENTS = [
+    ("AGENT_DINS",            "dins",     "agents.dins_agent",     "DINSAgent",
+     "INTERVAL_DINS",            1440, "Cal Fire post-wildfire rebuilds"),
+    ("AGENT_HUD_MULTIFAMILY", "hud",      "agents.hud_agent",      "HUDMultifamilyAgent",
+     "INTERVAL_HUD_MULTIFAMILY", 1440, "HUD/LIHTC multifamily rehab"),
+    ("AGENT_SHOVELS",         "shovels",  "agents.shovels_agent",  "ShovelsAgent",
+     "INTERVAL_SHOVELS",         1440, "Shovels.ai national permits"),
+    ("AGENT_ACCELA",          "accela",   "agents.accela_agent",   "AccelaAgent",
+     "INTERVAL_ACCELA",          720,  "Accela ACA portals (multi-city)"),
+    ("AGENT_THERMAL",         "thermal",  "agents.thermal_agent",  "ThermalAgent",
+     "INTERVAL_THERMAL",         1440, "Thermal anomaly detection (satellite)"),
+]
+
+
 def _try_register_optional():
-    """Registra agentes opcionales si están habilitados."""
-    if os.getenv("AGENT_DINS", "false").lower() in ("true", "1", "yes"):
-        try:
-            from agents.dins_agent import DINSAgent
-            AGENT_REGISTRY["dins"] = {
-                "class": DINSAgent, "env_key": "AGENT_DINS",
-                "interval_key": "INTERVAL_DINS", "default_interval": 1440,
-            }
-            logger.info("[dins] Agente registrado (Cal Fire post-wildfire rebuilds)")
-        except Exception as e:
-            logger.warning(f"[dins] No se pudo importar DINSAgent: {e}")
+    """Registra agentes opcionales si están habilitados.
 
-    if os.getenv("AGENT_HUD_MULTIFAMILY", "false").lower() in ("true", "1", "yes"):
+    Loguea SIEMPRE el estado de cada opt-in (habilitado / deshabilitado /
+    error de import) para que el operador pueda diagnosticar por qué
+    algún agente no aparece en el scheduler.
+    """
+    enabled_count = 0
+    for env_key, agent_key, module, cls_name, interval_key, default_min, descr in _OPTIONAL_AGENTS:
+        raw = os.getenv(env_key, "false").lower()
+        if raw not in ("true", "1", "yes"):
+            logger.info(f"[{agent_key}] Opt-in deshabilitado ({env_key}={raw or 'unset'}) — {descr}")
+            continue
         try:
-            from agents.hud_agent import HUDMultifamilyAgent
-            AGENT_REGISTRY["hud"] = {
-                "class": HUDMultifamilyAgent, "env_key": "AGENT_HUD_MULTIFAMILY",
-                "interval_key": "INTERVAL_HUD_MULTIFAMILY", "default_interval": 1440,
+            mod = __import__(module, fromlist=[cls_name])
+            cls = getattr(mod, cls_name)
+            AGENT_REGISTRY[agent_key] = {
+                "class": cls, "env_key": env_key,
+                "interval_key": interval_key, "default_interval": default_min,
             }
-            logger.info("[hud] Agente registrado (HUD/LIHTC multifamily rehab)")
+            logger.info(f"[{agent_key}] ✓ Agente registrado — {descr}")
+            enabled_count += 1
         except Exception as e:
-            logger.warning(f"[hud] No se pudo importar HUDMultifamilyAgent: {e}")
+            logger.warning(f"[{agent_key}] ✗ No se pudo importar {cls_name}: {e}")
 
-    if os.getenv("AGENT_SHOVELS", "false").lower() in ("true", "1", "yes"):
-        try:
-            from agents.shovels_agent import ShovelsAgent
-            AGENT_REGISTRY["shovels"] = {
-                "class": ShovelsAgent, "env_key": "AGENT_SHOVELS",
-                "interval_key": "INTERVAL_SHOVELS", "default_interval": 1440,
-            }
-            logger.info("[shovels] Agente registrado (Shovels.ai national permits)")
-        except Exception as e:
-            logger.warning(f"[shovels] No se pudo importar ShovelsAgent: {e}")
+    logger.info(f"[opt-in] {enabled_count}/{len(_OPTIONAL_AGENTS)} agentes opcionales activos")
 
 
 # ── Singletons de agentes ──────────────────────────────────────────────────────
@@ -293,6 +300,33 @@ def cmd_run_one(agent_key: str):
     logger.info(f"[{agent_key}] Manual: {found} encontrados, {sent} enviados")
 
 
+def cmd_flush_backlog(agent_key: str | None = None):
+    """
+    Reprocesa leads atascados en consolidated_leads (notified=0).
+
+    Útil después de cambiar el filtro _has_contact() — leads que antes
+    fueron rechazados pueden ahora pasar.
+
+    agent_key=None  → drena todos los agentes registrados
+    agent_key="x"   → drena solo el agente 'x'
+    """
+    _try_register_optional()
+    targets = [agent_key] if agent_key else list(AGENT_REGISTRY.keys())
+    total_sent = 0
+    for key in targets:
+        if key not in AGENT_REGISTRY:
+            logger.warning(f"[flush] Agente desconocido: '{key}', saltado")
+            continue
+        agent = _get_or_create_agent(key)
+        try:
+            sent = agent.flush_backlog()
+            total_sent += sent
+            logger.info(f"[flush:{key}] {sent} leads enviados desde backlog")
+        except Exception as e:
+            logger.error(f"[flush:{key}] error: {e}", exc_info=True)
+    logger.info(f"[flush] TOTAL: {total_sent} leads drenados del backlog")
+
+
 def cmd_start():
     """
     Inicia el scheduler Hermes-style.
@@ -407,6 +441,8 @@ if __name__ == "__main__":
     parser.add_argument("--stats",  action="store_true", help="Estadísticas de leads enviados")
     parser.add_argument("--health", action="store_true", help="Health report del sistema")
     parser.add_argument("--run",    metavar="AGENT",     help="Ejecuta un agente manualmente")
+    parser.add_argument("--flush-backlog", nargs="?", const="__ALL__", metavar="AGENT",
+                        help="Reprocesa leads atascados en consolidated_leads (todos los agentes si no se especifica)")
     args = parser.parse_args()
 
     if args.test:
@@ -422,5 +458,11 @@ if __name__ == "__main__":
         init_metrics_db()
         load_all_contacts()
         cmd_run_one(args.run)
+    elif args.flush_backlog:
+        init_db()
+        init_metrics_db()
+        load_all_contacts()
+        target = None if args.flush_backlog == "__ALL__" else args.flush_backlog
+        cmd_flush_backlog(target)
     else:
         cmd_start()
