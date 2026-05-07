@@ -842,9 +842,19 @@ class CRMSync:
             rows = cursor.fetchall()
         except Exception as e:
             logger.error(f"Error leyendo SQLite: {e}")
-            return
+            return 0
 
         if not rows:
+            # Debug: chequear cuántos leads hay sin sincronizar
+            try:
+                debug_cursor = conn.execute(
+                    "SELECT COUNT(*) FROM consolidated_leads WHERE crm_synced = 0"
+                )
+                count_unsync = debug_cursor.fetchone()[0]
+                if count_unsync > 0:
+                    logger.info(f"[crm_sync] {count_unsync} leads con crm_synced=0 aún en DB")
+            except Exception:
+                pass
             logger.info("No hay leads nuevos para sincronizar")
             conn.close()
             return 0
