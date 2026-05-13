@@ -5,10 +5,13 @@ adapted from [OpenOutreach](https://github.com/eracle/OpenOutreach).**
 
 Insulleads takes OpenOutreach's architecture — a self-hosted Django CRM
 with a daemon that discovers, qualifies (Bayesian GP) and contacts
-prospects — and swaps the LinkedIn-scraping backend for **public-data
+prospects — and swaps the LinkedIn-scraping backend for **15 public-data
 agents**: building permits, solar installs, 311 rodent reports, NOAA
-flood alerts, real-estate sales, and more. Outreach goes through
-Telegram / SendGrid / Twilio instead of LinkedIn messages.
+flood alerts, active construction inspections, real-estate sales, energy
+benchmarking, demolition/abatement permits, Google Places, Yelp, Cal Fire
+wildfire rebuilds (DINS), HUD/LIHTC multifamily, Shovels.ai national
+permits, Accela ACA portals, and Landsat-8 thermal anomalies. Outreach
+goes through Telegram / SendGrid / Twilio instead of LinkedIn messages.
 
 > Describe your product. Define your target market. The daemon finds
 > the leads for you, ranks them with a Bayesian qualifier, and messages
@@ -369,6 +372,441 @@ AGENT_ENERGY=true
 AGENT_PLACES=false
 AGENT_YELP=false
 ```
+
+---
+
+## Discovery Agents — Reference
+
+Each agent runs on a configurable interval, fetches leads from one or more public
+data sources, scores them with the memory-enhanced scorer, and routes notifications
+to Telegram (primary) + WhatsApp / Email for high-score leads. Cross-agent
+deduplication (`utils/dedup.py`) automatically merges data from multiple agents
+that report the same address into a single enriched lead.
+
+### Standard agents (on by default)
+
+These ten agents start automatically unless their env var is set to `false`.
+
+---
+
+#### 🏗️ `permits` — Building Permits
+
+| | |
+|---|---|
+| **File** | `agents/permits_agent.py` |
+| **Env var** | `AGENT_PERMITS=true` |
+| **Interval** | 60 min (tunable: `INTERVAL_PERMITS`) |
+| **Engine** | Socrata + CKAN + CKAN SQL |
+| **Geography** | San Francisco, San Jose, Oakland, Berkeley, Fremont, Sunnyvale, Richmond, Hayward, Vallejo, Napa, Petaluma, Santa Cruz, Stockton (25+ endpoints) |
+
+**What it finds:** Construction, remodel, addition, and renovation building permits
+issued by Bay Area municipal permit offices. Filters on `MIN_PERMIT_VALUE` ($50k
+default) and `PERMIT_MONTHS` (3-month window) to surface high-value, recently-active
+jobs.
+
+**Why it matters for insulation:** Every building permit for new construction, addition,
+or full renovation requires insulation under Title 24. The permit identifies the
+general contractor by name and CSLB license number — often before the job starts.
+
+**Contact enrichment (5-tier cascade):**
+1. Local CSV cache (`contacts/*.csv`)
+2. CSLB license lookup (phone, company city, license status)
+3. Hunter.io (email)
+4. Apollo.io (decision-maker name + LinkedIn)
+5. LLM `WebSearchTool` — last resort (disable with `PERMITS_LLM_ENRICH=false`)
+
+**Quality filters:** Drops enforcement permits, planning-only approvals, and
+out-of-trade scope (fences, signs, pools, demolition-only). Stale or unparseable
+`issued_date` values are rejected.
+
+---
+
+#### ☀️ `solar` — Solar Installations
+
+| | |
+|---|---|
+| **File** | `agents/solar_agent.py` |
+| **Env var** | `AGENT_SOLAR=true` |
+| **Interval** | 60 min (`INTERVAL_SOLAR`) |
+| **Engine** | Socrata + CKAN + NREL Solar Resource API |
+| **Geography** | SF, San Jose, Oakland, Berkeley, Fremont, Sunnyvale, Richmond (7 cities) |
+
+**What it finds:** Solar installation permits and applications from municipal permit
+offices, enriched with NREL solar resource data. Optional paid sources: Google
+Solar API (rooftop potential), Aurora Solar (active proposals), EnergySage
+(marketplace buyers actively seeking quotes).
+
+**Why it matters:** Solar installers always look for cross-sell opportunities — a home
+adding solar panels almost always needs a full energy-efficiency audit, and under-
+insulated envelopes are the top reason solar ROI falls short of projections.
+
+**Key env vars:** `NREL_API_KEY` (free), `GOOGLE_SOLAR_API_KEY` ($0.40/req),
+`AURORA_SOLAR_API_KEY` ($100+/mo), `MIN_PERMIT_VALUE`, `PERMIT_MONTHS`.
+
+---
+
+#### 🐀 `rodents` — 311 Pest & Rodent Reports
+
+| | |
+|---|---|
+| **File** | `agents/rodents_agent.py` |
+| **Env var** | `AGENT_RODENTS=true` |
+| **Interval** | 120 min (`INTERVAL_RODENTS`) |
+| **Engine** | SeeClickFix (5 city portals) |
+| **Geography** | San Francisco, Oakland, San Jose, Berkeley, Fremont |
+
+**What it finds:** 311 service requests for rodent infestations, termites, wildlife
+intrusion (raccoons, squirrels, opossums), cockroaches, and general pest activity
+within the last `RODENT_MONTHS` (default: 2 months).
+
+**Pest types and why they matter for insulation:**
+
+| Pest | Severity | Insulation angle |
+|------|----------|-----------------|
+| Rodents / rats | High | Rodents nest in and shred attic/crawlspace insulation |
+| Termites | High | Structural damage always requires insulation replacement |
+| Wildlife (raccoons, squirrels) | Medium | Attic insulation contaminated or destroyed |
+| Cockroaches / bed bugs | Low | Contamination requires inspection and partial replacement |
+
+Non-pest 311 categories (graffiti, potholes, abandoned vehicles) are filtered out.
+Optional enrichment: ATTOM Property API for property age and assessed value.
+
+---
+
+#### 🌊 `flood` — NOAA Flood Alerts
+
+| | |
+|---|---|
+| **File** | `agents/flood_agent.py` |
+| **Env var** | `AGENT_FLOOD=true` |
+| **Interval** | 30 min (`INTERVAL_FLOOD`) |
+| **Engine** | NOAA Weather API (no auth required) |
+| **Geography** | 13 Bay Area forecast zones (SF, Alameda/Oakland, Santa Clara Valley, Contra Costa, San Mateo, Marin, Sonoma, Napa, Solano, East Bay, San Joaquin) |
+
+**What it finds:** Active NOAA flood warnings, watches, and advisories for Bay Area
+weather zones. Catches Flood Warning, Flash Flood Warning, Coastal Flood Warning,
+Flood Advisory, and related event types.
+
+**Why it matters:** Flood and moisture intrusion is the primary cause of crawlspace
+and basement insulation failure. A flood advisory in a neighborhood is an immediate
+outreach window — homeowners will be assessing damage within days.
+
+---
+
+#### 🚧 `construction` — Active Construction Inspections
+
+| | |
+|---|---|
+| **File** | `agents/construction_agent.py` |
+| **Env var** | `AGENT_CONSTRUCTION=true` |
+| **Interval** | 60 min (`INTERVAL_CONSTRUCTION`) |
+| **Engine** | Socrata + CKAN |
+| **Geography** | SF, San Jose, Oakland, Sunnyvale, Berkeley, Richmond |
+
+**What it finds:** Scheduled and completed building inspection records for projects
+currently under construction — not just permitted, but actively being built.
+`CONSTRUCTION_MONTHS` window (default: 1 month, tighter than permits).
+
+**Why it matters:** Inspections reveal the construction _phase_, which tells you
+exactly when to call:
+
+| Phase | Signal | Action |
+|-------|--------|--------|
+| Foundation | Too early | Log for follow-up |
+| Framing | **Contact now** | Insulation is the immediate next step |
+| Insulation | They're buying | Find out the current supplier |
+| Drywall | Last chance | Blown-in retrofit still possible |
+| Final | Missed this job | Add to future-upgrades list |
+
+Optional paid enrichment: BuildZoom API for advanced project tracking (`BUILDZOOM_API_KEY`).
+
+---
+
+#### 🏠 `realestate` — Recent Property Sales
+
+| | |
+|---|---|
+| **File** | `agents/realestate_agent.py` |
+| **Env var** | `AGENT_REALESTATE=true` |
+| **Interval** | 120 min (`INTERVAL_REALESTATE`) |
+| **Engine** | Socrata |
+| **Geography** | San Francisco, Alameda County (Oakland, Berkeley, Fremont, Hayward) |
+
+**What it finds:** Property deeds recorded in the last `SALE_MONTHS` (default: 2
+months) with a sale price above `MIN_SALE_PRICE` ($400k default).
+
+**Why it matters:** A new homeowner buying a home older than 20 years is one of the
+strongest purchase-intent signals in the market. The first 6-12 months after purchase
+is when renovation decisions are made. The buyer's name is on the deed and often
+findable via county records.
+
+---
+
+#### ⚡ `energy` — Energy Benchmarking / Audits
+
+| | |
+|---|---|
+| **File** | `agents/energy_agent.py` |
+| **Env var** | `AGENT_ENERGY=true` |
+| **Interval** | 360 min (`INTERVAL_ENERGY`) |
+| **Engine** | Socrata |
+| **Geography** | San Francisco (commercial buildings >10k sqft) |
+
+**What it finds:** Commercial buildings with low ENERGY STAR scores (< 50) from SF's
+mandatory energy benchmarking dataset. Also picks up permit applications with
+"energy audit" or "energy retrofit" in the description.
+
+**Why it matters:** Under SF's Building Performance Ordinance, commercial buildings
+that fail to improve their score face escalating fines. A low ENERGY STAR score is
+a compliance problem the building owner is legally required to fix. Insulation is
+typically the highest-ROI single improvement.
+
+**Key fields surfaced:** `energy_star_score`, `total_ghg_emissions`, `floor_area`,
+`year_built`, `primary_property_type`.
+
+---
+
+#### 🔨 `deconstruction` — Demolition & Abatement Permits
+
+| | |
+|---|---|
+| **File** | `agents/deconstruction_agent.py` |
+| **Env var** | `AGENT_DECONSTRUCTION=true` |
+| **Interval** | 120 min (`INTERVAL_DECONSTRUCTION`) |
+| **Engine** | Socrata + CKAN |
+| **Geography** | SF, San Jose, Oakland, Berkeley |
+
+**What it finds:** Demolition permits, asbestos abatement notifications (BAAQMD),
+hazardous material removal, and selective deconstruction projects above
+`MIN_DECON_VALUE` ($50k default) within `DECON_MONTHS` (3 months).
+
+**Why it matters for insulation:**
+1. Demolition → new construction requires all-new insulation (Title 24)
+2. Asbestos abatement → old insulation is removed; replacement is mandatory
+3. Deep renovation / selective deconstruction → full insulation upgrade
+4. Hazmat removal → re-insulation is part of the remediation package
+
+Optional paid enrichment: ATTOM Property pre-foreclosure data (`ATTOM_API_KEY`).
+
+---
+
+#### 📍 `places` — Google Places Contractor Search
+
+| | |
+|---|---|
+| **File** | `agents/places_agent.py` |
+| **Env var** | `AGENT_PLACES=true` (opt-out default: `false`) |
+| **Interval** | 1440 min / 24h (`INTERVAL_PLACES`) |
+| **Engine** | Google Places API (Nearby Search) |
+| **Geography** | SF, Oakland, San Jose, Fremont, Berkeley (5 city centers, 5–10 km radius) |
+| **API cost** | $200/mo free credit ≈ 5,000 searches |
+
+**What it finds:** Active general contractors, remodelers, HVAC contractors,
+roofing contractors, and construction companies discoverable on Google Maps.
+
+**Why it matters:** These are businesses already doing the work where insulation is
+a natural upsell or referral opportunity. A Google-verified business has a phone
+number and often a website — contact quality is high.
+
+**Requires:** `GOOGLE_PLACES_API_KEY`.
+
+---
+
+#### ⭐ `yelp` — Yelp Fusion Contractor Directory
+
+| | |
+|---|---|
+| **File** | `agents/yelp_agent.py` |
+| **Env var** | `AGENT_YELP=true` (opt-out default: `false`) |
+| **Interval** | 1440 min / 24h (`INTERVAL_YELP`) |
+| **Engine** | Yelp Fusion API (5,000 calls/day free) |
+| **Geography** | SF, Oakland, San Jose, Fremont, Berkeley, Hayward, Richmond, Sunnyvale |
+
+**What it finds:** Yelp-listed contractors in categories: `contractors`, `hvac`,
+`roofing`, `insulation_installation`, `handyman`, `home_energy_auditors` with
+recent activity and high ratings.
+
+**Why it matters:** Yelp contractors with active reviews are currently running
+jobs. High ratings signal quality GCs who care about their referral reputation —
+exactly the partner profile for insulation subcontracting.
+
+**Requires:** `YELP_API_KEY` (free at [yelp.com/developers](https://www.yelp.com/developers/v3/manage_app)).
+
+---
+
+### Opt-in agents (disabled by default)
+
+These five agents target specialized or high-volume data sources. Enable them
+individually by setting the corresponding env var to `true`.
+
+---
+
+#### 🔥 `dins` — Cal Fire DINS Post-Wildfire Reconstruction
+
+| | |
+|---|---|
+| **File** | `agents/dins_agent.py` |
+| **Env var** | `AGENT_DINS=true` |
+| **Interval** | 1440 min / 24h (`INTERVAL_DINS`) |
+| **Engine** | ArcGIS FeatureServer (Cal Fire) |
+| **Geography** | California statewide (all major fire perimeters: Camp, Glass, Dixie, Mosquito, Park, Borel, 2023–2025) |
+
+**What it finds:** Every structure inspected by Cal Fire DINS (Damage Inspection)
+after a wildfire, categorized by damage level: Destroyed, Major Damage, Minor
+Damage, Affected. Default filter: `DINS_DAMAGE_MIN=major` (≥ 26% damage).
+
+**Why it matters:** This is the entire post-wildfire rebuild market in California.
+Every "Destroyed" or "Major Damage" structure will be rebuilt — insurance covers
+it — and Title 24 mandates new insulation on every rebuild. Signal-to-intent ratio
+is effectively 100%.
+
+**Cross-agent synergy:** When `permits` is also enabled, the deduplication engine
+automatically merges a DINS address with its active rebuild permit, giving you
+the contractor name on top of the property owner address.
+
+**Key env vars:** `DINS_LAYERS` (comma-sep ArcGIS URLs), `DINS_DAMAGE_MIN`,
+`DINS_MAX_RECORDS` (default 1000), `DINS_TIMEOUT_S` (default 45).
+
+---
+
+#### 🏘️ `hud` — HUD / LIHTC Multifamily Rehab
+
+| | |
+|---|---|
+| **File** | `agents/hud_agent.py` |
+| **Env var** | `AGENT_HUD_MULTIFAMILY=true` |
+| **Interval** | 1440 min / 24h (`INTERVAL_HUD_MULTIFAMILY`) |
+| **Engine** | ArcGIS FeatureServer (HUD Open Data) |
+| **Geography** | California (configurable via `HUD_STATE`) |
+
+**What it finds:** LIHTC (Low-Income Housing Tax Credit) multifamily properties
+placed in service ≥ `HUD_REHAB_WINDOW_YRS` (default 20) years ago — the primary
+rehab signal — plus HUD-assisted multifamily properties with ≥ `HUD_MIN_UNITS`
+(default 8) units.
+
+**Why it matters:** One successful conversation with a multifamily property
+manager or sponsor = a 50–500 unit insulation job. LIHTC properties have
+contractual rehabilitation funding cycles every 15–30 years. The dataset ships
+with the sponsor/owner contact organization, giving the enrichment cascade a
+real entity to look up.
+
+**Scale:** ~10× ROI per outreach hour vs. SFR permits.
+
+**Key env vars:** `HUD_STATE`, `HUD_MIN_UNITS`, `HUD_REHAB_WINDOW_YRS`,
+`HUD_MAX_RECORDS` (2000), `HUD_TIMEOUT_S` (60).
+
+---
+
+#### 🪏 `shovels` — Shovels.ai National Permit Aggregator
+
+| | |
+|---|---|
+| **File** | `agents/shovels_agent.py` |
+| **Env var** | `AGENT_SHOVELS=true` |
+| **Interval** | 1440 min / 24h (`INTERVAL_SHOVELS`) |
+| **Engine** | Shovels.ai REST API |
+| **Geography** | Any US state (default CA — extends to LA, San Diego, Sacramento, OC, Inland Empire and beyond) |
+
+**What it finds:** Building permits across thousands of US jurisdictions with a single
+normalized schema. Filters: `SHOVELS_PERMIT_TYPES` (residential / additions / new
+construction / re-roof), `SHOVELS_MIN_VALUE` ($50k), `SHOVELS_DAYS_BACK` (90 days),
+`SHOVELS_STATES`.
+
+**Why it matters:** The `permits` agent covers ~25 Bay Area endpoints. Shovels adds
+statewide CA coverage and the rest of the country with one source and a single API
+key. Also returns contractor license numbers that feed directly into the 5-tier
+enrichment cascade.
+
+**Soft-fails gracefully:** returns `[]` with a warning log when `SHOVELS_API_KEY`
+is not set — the daemon keeps running.
+
+**Requires:** `SHOVELS_API_KEY` (free tier at [shovels.ai](https://shovels.ai/)).
+Key env vars: `SHOVELS_STATES`, `SHOVELS_MIN_VALUE`, `SHOVELS_DAYS_BACK`,
+`SHOVELS_MAX_PER_STATE` (200).
+
+---
+
+#### 🏛️ `accela` — Accela ACA Portal Scraper
+
+| | |
+|---|---|
+| **File** | `agents/accela_agent.py` |
+| **Env var** | `AGENT_ACCELA=true` |
+| **Interval** | 720 min / 12h (`INTERVAL_ACCELA`) |
+| **Engine** | Playwright / ASP.NET form scraper (stealth TLS) |
+| **Geography** | Oakland (Accela ACA portal — no public REST API) |
+
+**What it finds:** Building permits from city portals that use Accela Citizen Access
+but don't expose a public REST API. The agent maintains an ASP.NET session,
+submits the search form with a `PERMIT_MONTHS` date range, and paginates through
+results (up to `ACCELA_MAX_PAGES`, default 5).
+
+**Relevant permit types:** ADDITION, ALTERATION, REMODEL, NEW CONSTRUCTION, ADU,
+SOFT STORY, SEISMIC, TENANT IMPROVEMENT.
+
+**Why it matters:** Accela-based cities are a gap in the Socrata/CKAN coverage.
+Oakland alone represents a significant permit volume that `permits_agent` doesn't
+reach.
+
+**Requires:** `utils/stealth_fetcher.py` (bundled). `ACCELA_MAX_PAGES`,
+`PERMIT_MONTHS` env vars.
+
+---
+
+#### 🌡️ `thermal` — Landsat-8 Thermal Anomaly Detection
+
+| | |
+|---|---|
+| **File** | `agents/thermal_agent.py` |
+| **Env var** | `AGENT_THERMAL=true` |
+| **Interval** | 1440 min / 24h (`INTERVAL_THERMAL`) |
+| **Engine** | Local cache (offline raster pull via Earth Engine) |
+| **Geography** | Bay Area (wherever `thermal_pull` was last run) |
+
+**What it finds:** Buildings whose surface temperature exceeds the scene median by
+≥ 3 K (Kelvin), derived from Landsat-8 Band 10 thermal infrared imagery cross-
+referenced with OpenStreetMap building footprints.
+
+**Why it matters:** Elevated surface temperature = conditioned air escaping through
+the building envelope = under-insulated structure. This is the most direct physical
+signal that a building needs insulation work — no permit, no 311 report required.
+
+**Two-phase workflow:**
+1. Pull and cache raster data offline: `python manage.py thermal_pull`
+   (hits Google Earth Engine, writes `data/thermal/anomalies.parquet`)
+2. Agent reads the cache on every cycle and emits leads for anomalous buildings.
+
+**Soft-fails:** returns `[]` with an info log when no parquet cache exists.
+
+---
+
+### Agent scoring and routing summary
+
+| Agent | Default interval | Lead type | Contact signal |
+|-------|-----------------|-----------|----------------|
+| `permits` | 60 min | Building permit | Contractor (CSLB name + license) |
+| `solar` | 60 min | Solar permit | Contractor or property address |
+| `rodents` | 120 min | 311 pest report | Property address |
+| `flood` | 30 min | NOAA alert zone | Geographic zone |
+| `construction` | 60 min | Inspection record | Contractor + address |
+| `realestate` | 120 min | Deed recording | Buyer name + address |
+| `energy` | 360 min | Benchmarking score | Building name + address |
+| `deconstruction` | 120 min | Demo/abatement permit | Contractor + address |
+| `places` | 24h | Google Maps listing | Business phone/website |
+| `yelp` | 24h | Yelp business listing | Business phone/website |
+| `dins` *(opt-in)* | 24h | Wildfire damage record | Property address (+ permit cross-ref) |
+| `hud` *(opt-in)* | 24h | LIHTC/HUD property | Sponsor org name |
+| `shovels` *(opt-in)* | 24h | National permit | Contractor license |
+| `accela` *(opt-in)* | 12h | Accela ACA permit | Permit record |
+| `thermal` *(opt-in)* | 24h | Thermal anomaly | Building footprint (lat/lon) |
+
+**Scoring → routing:**
+- Score ≥ 90 → Telegram + WhatsApp + Email
+- Score ≥ 70 → Telegram + Email
+- Score < 70 → Telegram only
+
+Run any agent standalone: `python main.py --run <agent_key>`
+Drain stuck backlog: `python main.py --flush-backlog [agent_key]`
 
 #### Web crawler (crawl4ai)
 
