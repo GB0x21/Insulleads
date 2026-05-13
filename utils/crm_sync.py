@@ -80,12 +80,22 @@ AGENT_TO_SOURCE = {
 
 
 def _load_config() -> dict:
+    """
+    Carga config opcional desde data/crm_config.json.
+
+    NOTA: Este archivo es legacy — _bootstrap() carga todo desde MySQL
+    directamente, así que su ausencia no bloquea el sync. Se conserva
+    por compatibilidad con versiones anteriores.
+    """
     if not os.path.exists(CONFIG_PATH):
-        logger.error(f"Config no encontrado: {CONFIG_PATH}")
-        logger.error("Ejecuta primero: python utils/crm_setup.py")
+        logger.debug(f"Config opcional no encontrado: {CONFIG_PATH} (OK, _bootstrap lee de MySQL)")
         return {}
-    with open(CONFIG_PATH) as f:
-        return json.load(f)
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Error leyendo {CONFIG_PATH}: {e}")
+        return {}
 
 
 def _read_krayin_env() -> dict:
@@ -97,10 +107,12 @@ def _read_krayin_env() -> dict:
         "database": "krayin_crm",
         "user": "krayin",
         "password": "",
+        "_env_found": False,  # marca para diagnose
     }
     if not os.path.exists(env_path):
         logger.warning(f"Krayin .env no encontrado: {env_path}")
         return creds
+    creds["_env_found"] = True
 
     with open(env_path) as f:
         for line in f:
@@ -235,8 +247,86 @@ class CRMSync:
         self.type_ids = {}
 
     def is_configured(self) -> bool:
-        """Chequea si el CRM está configurado (MySQL + credenciales)."""
-        return bool(self.creds.get("host") and self.creds.get("user"))
+        """
+        Chequea si el CRM está configurado mínimamente.
+
+        Verifica que el .env de Krayin haya sido leído correctamente.
+        La conectividad real se valida en _bootstrap()._test_mysql() — si
+        Krayin está caído, el sync loguea el fallo pero no crashea.
+        """
+        if not self.creds.get("_env_found"):
+            logger.debug(
+                "[crm_sync] Krayin .env no encontrado — sync deshabilitado"
+            )
+            return False
+        return True
+
+    def diagnose(self) -> dict:
+        """
+        Diagnóstico completo del estado del CRM. Útil para `--diagnose-crm`.
+
+        Retorna dict con flags por componente:
+          - krayin_env_ok: ¿se leyó el .env de Krayin?
+          - mysql_ok: ¿MySQL responde?
+          - pipeline_ok: ¿hay pipeline default?
+          - sources_count: cuántos lead_sources existen
+          - pending_count: leads consolidados con crm_synced=0
+        """
+        report = {
+            "krayin_env_ok":   bool(self.creds.get("_env_found")),
+            "krayin_env_path": os.path.join(CRM_DIR, ".env"),
+            "mysql_ok":        False,
+            "pipeline_ok":     False,
+            "pipeline_id":     None,
+            "sources_count":   0,
+            "pending_count":   0,
+            "synced_count":    0,
+            "errors":          [],
+        }
+        if not report["krayin_env_ok"]:
+            report["errors"].append(
+                f"Krayin .env no encontrado en {report['krayin_env_path']}. "
+                f"Verifica CRM_DIR en tu .env de Insulleads."
+            )
+
+        # MySQL test
+        rows = _mysql_query(self.creds, "SELECT 1") if report["krayin_env_ok"] else []
+        report["mysql_ok"] = bool(rows)
+        if report["krayin_env_ok"] and not report["mysql_ok"]:
+            report["errors"].append(
+                "MySQL no responde — verifica que Krayin esté instalado y MySQL corriendo."
+            )
+
+        # Pipeline
+        if report["mysql_ok"]:
+            rows = _mysql_query(self.creds, "SELECT id FROM lead_pipelines WHERE is_default=1 LIMIT 1")
+            if not rows:
+                rows = _mysql_query(self.creds, "SELECT id FROM lead_pipelines ORDER BY id LIMIT 1")
+            if rows and rows[0]:
+                report["pipeline_ok"] = True
+                report["pipeline_id"] = int(rows[0][0])
+            else:
+                report["errors"].append(
+                    "No hay pipelines en Krayin. Ejecuta: python utils/crm_setup.py "
+                    "(o el primer sync los creará automáticamente)"
+                )
+
+            # Sources
+            rows = _mysql_query(self.creds, "SELECT COUNT(*) FROM lead_sources")
+            report["sources_count"] = int(rows[0][0]) if rows and rows[0] else 0
+
+        # SQLite pending
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            r = conn.execute("SELECT COUNT(*) FROM consolidated_leads WHERE crm_synced=0").fetchone()
+            report["pending_count"] = r[0] if r else 0
+            r = conn.execute("SELECT COUNT(*) FROM consolidated_leads WHERE crm_synced=1").fetchone()
+            report["synced_count"] = r[0] if r else 0
+            conn.close()
+        except Exception as e:
+            report["errors"].append(f"SQLite error: {e}")
+
+        return report
 
     def _test_mysql(self) -> bool:
         """Test MySQL connectivity."""
